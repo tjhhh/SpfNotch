@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QBrush, QCursor, Q
 from app.ui.pill_view import PillView
 from app.ui.expanded_view import ExpandedView
 from app.ui.styles import NOTCH_STYLESHEET
-from app.utils.win32_helpers import set_no_activate, set_tool_window, activate_window_focus
+from app.utils.win32_helpers import set_no_activate, set_tool_window, activate_window_focus, ensure_topmost
 from app.utils.color_helpers import extract_dominant_color, get_secondary_complement
 from app.core.state_manager import WorkerTask
 
@@ -102,6 +102,12 @@ class NotchWindow(QWidget):
         self.cursor_watchdog.setInterval(80)
         self.cursor_watchdog.timeout.connect(self._check_cursor_in_or_out)
 
+        # Persistent Z-Order Watchdog: enforces Notch stays above all windows & widgets
+        self.zorder_watchdog = QTimer(self)
+        self.zorder_watchdog.setInterval(1000)
+        self.zorder_watchdog.timeout.connect(self._maintain_topmost_zorder)
+        self.zorder_watchdog.start()
+
         # Animations
         self.anim = QPropertyAnimation(self, b"animatedGeometry")
         self.anim.setDuration(self.anim_dur)
@@ -132,11 +138,26 @@ class NotchWindow(QWidget):
             if os.path.exists(full_path):
                 QFontDatabase.addApplicationFont(full_path)
 
+    def _maintain_topmost_zorder(self):
+        """Enforces true topmost z-order over all desktop applications and widgets."""
+        if not self.isVisible():
+            return
+        ensure_topmost(int(self.winId()))
+        self.raise_()
+
+    def changeEvent(self, ev):
+        super().changeEvent(ev)
+        if self.isVisible():
+            ensure_topmost(int(self.winId()))
+            self.raise_()
+
     def showEvent(self, ev):
         super().showEvent(ev)
         hwnd = int(self.winId())
         set_no_activate(hwnd, enable=True)
         set_tool_window(hwnd)
+        ensure_topmost(hwnd)
+        self.raise_()
         QTimer.singleShot(50, self.run_startup_animation)
 
     def run_startup_animation(self):
@@ -166,6 +187,11 @@ class NotchWindow(QWidget):
         anim2.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.startup_group.addAnimation(anim2)
 
+        def on_startup_finished():
+            ensure_topmost(int(self.winId()))
+            self.raise_()
+
+        self.startup_group.finished.connect(on_startup_finished)
         self.startup_group.start()
 
     def _get_target_screen_geometry(self) -> QRect:
@@ -391,6 +417,8 @@ class NotchWindow(QWidget):
     # Hover and Expansion Control
     def enterEvent(self, ev):
         super().enterEvent(ev)
+        ensure_topmost(int(self.winId()))
+        self.raise_()
         self.auto_collapse_timer.stop()
         if not self.is_expanded:
             self.expand()
@@ -428,6 +456,8 @@ class NotchWindow(QWidget):
         if self.is_expanded:
             return
         self.is_expanded = True
+        ensure_topmost(int(self.winId()))
+        self.raise_()
         self.auto_collapse_timer.stop()
         self.cursor_watchdog.start()
 
@@ -459,6 +489,8 @@ class NotchWindow(QWidget):
 
         hwnd = int(self.winId())
         set_no_activate(hwnd, enable=True)
+        ensure_topmost(hwnd)
+        self.raise_()
 
         geo = self._get_target_screen_geometry()
         start_rect = self.geometry()
@@ -475,6 +507,8 @@ class NotchWindow(QWidget):
         self.anim.setEndValue(target_rect)
 
         def on_collapse_finished():
+            ensure_topmost(int(self.winId()))
+            self.raise_()
             self._run_collapse_jiggle(target_x, geo.y())
 
         try:
@@ -512,6 +546,11 @@ class NotchWindow(QWidget):
         anim_return.setEasingCurve(QEasingCurve.Type.OutBounce)
         self.jiggle_group.addAnimation(anim_return)
 
+        def on_jiggle_finished():
+            ensure_topmost(int(self.winId()))
+            self.raise_()
+
+        self.jiggle_group.finished.connect(on_jiggle_finished)
         self.jiggle_group.start()
 
     def paintEvent(self, ev):
