@@ -1,0 +1,32 @@
+{
+  "spotify": {
+    "client_id": "",
+    "client_secret": "",
+    "redirect_uri": "http://127.0.0.1:8888/callback",
+    "scope": "user-read-playback-state user-modify-playback-state user-read-currently-playing"
+  },
+  "ui": {
+    "notch_collapsed_width": 440,
+    "notch_collapsed_height": 50,
+    "notch_expanded_width": 540,
+    "notch_expanded_height": 460,
+    "auto_collapse_delay_ms": 350,
+    "animation_duration_ms": 240,
+    "polling_interval_ms": 2000,
+    "interpolation_tick_ms": 40,
+    "idle_mode": "lyrics"
+  },
+  "personalization": {
+    "preset": "default-black",
+    "opacity": 0.94,
+    "blur": 28,
+    "saturation": 180,
+    "specular_border": 0.18,
+    "chroma_glow": 0.25,
+    "tint_rgb": "9, 10, 15",
+    "notch_morph": "hardware-flush",
+    "scrubber_style": "waveform",
+    "lyric_style": "editorial-left",
+    "lyric_depth_blur": true
+  }
+}

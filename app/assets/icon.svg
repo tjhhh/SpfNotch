@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Deep Obsidian Matte Background -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#181f29"/>
+      <stop offset="35%" stop-color="#0e1218"/>
+      <stop offset="100%" stop-color="#05070a"/>
+    </linearGradient>
+
+    <!-- Glass Rim Border -->
+    <linearGradient id="rim" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="32%" stop-color="#3d4f64" stop-opacity="0.25"/>
+      <stop offset="85%" stop-color="#0e131a" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1DB954" stop-opacity="0.75"/>
+    </linearGradient>
+
+    <!-- Specular Highlight -->
+    <radialGradient id="spec" cx="35%" cy="18%" r="65%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="45%" stop-color="#ffffff" stop-opacity="0.02"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Spotify Signature Electric Green Gradient -->
+    <linearGradient id="spotGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38fb87"/>
+      <stop offset="35%" stop-color="#1ED760"/>
+      <stop offset="70%" stop-color="#1DB954"/>
+      <stop offset="100%" stop-color="#118737"/>
+    </linearGradient>
+
+    <!-- Accent Green for Diagonal Depth -->
+    <linearGradient id="spotAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#28f075"/>
+      <stop offset="50%" stop-color="#1aa84b"/>
+      <stop offset="100%" stop-color="#0e6f2d"/>
+    </linearGradient>
+
+    <!-- Top Specular Sheen for 3D Luster -->
+    <linearGradient id="sheen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Neon Glow Filter -->
+    <filter id="neon" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="24" result="blur"/>
+      <feComponentTransfer in="blur" result="boost">
+        <feFuncA type="linear" slope="0.8"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="boost"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="ambientBloom" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="38" result="blur"/>
+      <feComponentTransfer in="blur" result="boost">
+        <feFuncA type="linear" slope="0.5"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode in="boost"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Diagonal Shadow for N crossbeam -->
+    <filter id="diagShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="-8" dy="12" stdDeviation="12" flood-color="#000000" flood-opacity="0.85"/>
+    </filter>
+  </defs>
+
+  <!-- Ambient Green Bloom behind squircle -->
+  <rect x="44" y="52" width="936" height="936" rx="220" ry="220" fill="#1DB954" opacity="0.22" filter="url(#ambientBloom)"/>
+
+  <!-- Squircle Base Container -->
+  <rect x="48" y="48" width="928" height="928" rx="215" ry="215" fill="url(#bg)" stroke="url(#rim)" stroke-width="7"/>
+  <rect x="52" y="52" width="920" height="920" rx="211" ry="211" fill="url(#spec)"/>
+
+  <!-- Central "S N" Monogram -->
+  <!-- Centered, with Spotify 8° dynamic forward tilt -->
+  <g transform="translate(512, 512) skewX(-7) translate(-512, -512)" filter="url(#neon)">
+    
+    <!-- === LETTER S (Left) === -->
+    <g>
+      <!-- S Base Stroke -->
+      <path fill="none" stroke="url(#spotGrad)" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"
+            d="M 435 320
+               C 435 240, 205 240, 205 375
+               C 205 515, 455 485, 455 625
+               C 455 760, 225 760, 225 680" />
+
+      <!-- S Gloss Highlight on top arch -->
+      <path fill="none" stroke="url(#sheen)" stroke-width="28" stroke-linecap="round"
+            d="M 405 305
+               C 405 260, 240 260, 230 350" />
+    </g>
+
+    <!-- === LETTER N (Right) === -->
+    <g>
+      <!-- Left Stem of N -->
+      <rect x="560" y="260" width="84" height="500" rx="42" fill="url(#spotAccent)"/>
+
+      <!-- Right Stem of N -->
+      <rect x="780" y="260" width="84" height="500" rx="42" fill="url(#spotGrad)"/>
+
+      <!-- Diagonal of N (crossing from top-left to bottom-right) -->
+      <g filter="url(#diagShadow)">
+        <path fill="url(#spotGrad)" d="
+          M 574 266
+          L 846 728
+          A 42 42 0 0 1 778 758
+          L 506 296
+          A 42 42 0 0 1 574 266
+          Z
+        "/>
+      </g>
+
+      <!-- Gloss highlight on top of N right stem -->
+      <circle cx="822" cy="302" r="24" fill="url(#sheen)"/>
+    </g>
+  </g>
+</svg>

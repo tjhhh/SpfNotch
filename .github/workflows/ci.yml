@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Smoke test (Demo Mode)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python app/main.py --test
+      - name: Make sure no secrets are committed
+        shell: pwsh
+        run: |
+          $bad = git ls-files | Where-Object { $_ -match '(^|/)(config\.json|\.spotify_token_cache)$' }
+          if ($bad) { Write-Error "Secret files are tracked: $bad"; exit 1 }

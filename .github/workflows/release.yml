@@ -1,0 +1,61 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python app/main.py --test
+
+      - name: Build exe
+        run: pyinstaller spfnotch.spec --noconfirm
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory release | Out-Null
+          Copy-Item dist/spfnotch.exe release/
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, LEGAL.md, README.md, config.example.json release/
+          Copy-Item app/assets/fonts/OFL.txt release/OFL-Montserrat.txt
+          Compress-Archive -Path release/* -DestinationPath spfnotch-windows-x64.zip
+          (Get-FileHash dist/spfnotch.exe -Algorithm SHA256).Hash | Out-File -Encoding ascii spfnotch.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spfnotch-windows
+          path: |
+            dist/spfnotch.exe
+            spfnotch-windows-x64.zip
+            spfnotch.exe.sha256
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/spfnotch.exe
+            spfnotch-windows-x64.zip
+            spfnotch.exe.sha256
