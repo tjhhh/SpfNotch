@@ -70,7 +70,9 @@ def setup_single_instance_server(notch_window) -> QLocalServer:
             if client:
                 def on_ready():
                     data = bytes(client.readAll()).decode("utf-8", errors="ignore")
-                    if "EXPAND" in data:
+                    if "QUIT" in data:
+                        QApplication.quit()
+                    elif "EXPAND" in data:
                         notch_window.expand()
                 client.readyRead.connect(on_ready)
         server.newConnection.connect(on_new_connection)

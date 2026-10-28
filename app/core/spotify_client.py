@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import webbrowser
 import http.server
@@ -60,6 +61,10 @@ class SpotifyClient:
         self.auth_manager: SpotifyOAuth | None = None
         self.is_connected = False
         self.is_authenticating = False
+        self.last_device_id: str | None = None
+        self.last_device_name: str = "Spotify"
+        self._last_init_attempt: float = 0.0
+        self._track_album_map: dict[str, str] = {}
         
         self.load_config()
         self.init_spotify()
@@ -180,13 +185,33 @@ class SpotifyClient:
 
         threading.Thread(target=bg_auth, daemon=True).start()
 
+    def _ensure_connected(self) -> bool:
+        if self.sp and self.is_connected:
+            return True
+        if self.is_authenticating or not self.client_id or not self.client_secret:
+            return False
+        import time
+        now = time.time()
+        if now - self._last_init_attempt < 8.0:
+            return False
+        self._last_init_attempt = now
+        return self.init_spotify()
+
     def get_current_playback(self) -> dict | None:
-        if not self.sp or not self.is_connected:
+        if not self._ensure_connected():
             return None
 
         try:
             playback = self.sp.current_playback()
-            if not playback or not playback.get("item"):
+            if not playback:
+                return None
+
+            dev = playback.get("device")
+            if dev and dev.get("id"):
+                self.last_device_id = dev.get("id")
+                self.last_device_name = dev.get("name", "Spotify")
+
+            if not playback.get("item"):
                 return None
 
             item = playback["item"]
@@ -212,6 +237,55 @@ class SpotifyClient:
             print(f"[SpotifyClient] General error in playback: {e}")
             return None
 
+    def get_best_device_id(self) -> tuple[str | None, str]:
+        """
+        Finds the best active or standby Spotify Connect device.
+        Returns (device_id, description_or_name).
+        """
+        if not self._ensure_connected():
+            return None, "Spotify belum terhubung."
+        try:
+            res = self.sp.devices()
+            devices = res.get("devices", []) if res else []
+            if not devices:
+                # Attempt to launch desktop Spotify client on Windows if available
+                if sys.platform == "win32":
+                    try:
+                        os.startfile("spotify:")
+                        import time
+                        for _ in range(5):
+                            time.sleep(0.5)
+                            res_retry = self.sp.devices()
+                            devices = res_retry.get("devices", []) if res_retry else []
+                            if devices:
+                                break
+                    except Exception:
+                        pass
+                if not devices:
+                    return None, "Tidak ada perangkat aktif. Buka Spotify di PC/HP kamu."
+
+            # 1. Prefer currently active device
+            for d in devices:
+                if d.get("is_active"):
+                    self.last_device_id = d.get("id")
+                    self.last_device_name = d.get("name", "Perangkat Aktif")
+                    return self.last_device_id, self.last_device_name
+
+            # 2. Prefer Computer/Desktop device
+            for d in devices:
+                if d.get("type", "").lower() == "computer":
+                    self.last_device_id = d.get("id")
+                    self.last_device_name = d.get("name", "Komputer")
+                    return self.last_device_id, self.last_device_name
+
+            # 3. Fallback to first available device
+            self.last_device_id = devices[0].get("id")
+            self.last_device_name = devices[0].get("name", "Perangkat")
+            return self.last_device_id, self.last_device_name
+        except Exception as e:
+            print(f"[SpotifyClient] get_best_device_id error: {e}")
+            return None, f"Error perangkat: {e}"
+
     def toggle_play(self, current_is_playing: bool) -> bool:
         if not self.sp:
             return False
@@ -219,7 +293,11 @@ class SpotifyClient:
             if current_is_playing:
                 self.sp.pause_playback()
             else:
-                self.sp.start_playback()
+                dev_id, _ = self.get_best_device_id()
+                if dev_id:
+                    self.sp.start_playback(device_id=dev_id)
+                else:
+                    self.sp.start_playback()
             return True
         except Exception as e:
             print(f"[SpotifyClient] toggle_play error: {e}")
@@ -272,23 +350,44 @@ class SpotifyClient:
                 artists = ", ".join([a["name"] for a in item.get("artists", [])])
                 images = item.get("album", {}).get("images", [])
                 cover_url = images[-1]["url"] if images else ""
+                t_uri = item.get("uri", "")
+                a_uri = item.get("album", {}).get("uri", "")
+                if t_uri and a_uri:
+                    self._track_album_map[t_uri] = a_uri
                 queue_tracks.append({
                     "id": item.get("id", ""),
                     "title": item.get("name", "Unknown"),
                     "artist": artists,
+                    "album": item.get("album", {}).get("name", ""),
+                    "album_uri": a_uri,
                     "duration_ms": item.get("duration_ms", 0),
                     "cover_url": cover_url,
-                    "uri": item.get("uri", "")
+                    "uri": t_uri
                 })
             return queue_tracks
         except Exception as e:
             print(f"[SpotifyClient] get_queue error: {e}")
             return []
 
+    def _resolve_uri(self, uri: str) -> str:
+        """If a demo fallback URI is clicked while connected to Spotify, resolve to real Spotify track URI."""
+        demo_queries = {
+            "spotify:track:ini_abadi": "Ini Abadi Perunggu",
+            "spotify:track:abadi_dendi": "Abadi Indo Version Dendi Nata",
+            "spotify:track:abadi_collab": "Abadi Dendi Nata Hendra Kumbara",
+            "spotify:track:bunga_abadi": "Bunga Abadi Rio Clappy",
+            "spotify:track:ora_urus": "Ora Urus Toton Caribo",
+        }
+        if uri in demo_queries and self.sp:
+            tracks = self.search_tracks(demo_queries[uri], limit=1)
+            if tracks and tracks[0].get("uri"):
+                return tracks[0]["uri"]
+        return uri
+
     def search_tracks(self, query: str, limit: int = 10) -> list[dict]:
         if not query.strip():
             return []
-        if not self.sp:
+        if not self._ensure_connected():
             # Demo fallback catalog matching Figma Redesign
             catalog = [
                 {"id": "ini-abadi", "title": "Ini Abadi", "artist": "Perunggu", "duration_ms": 242000, "cover_url": "", "uri": "spotify:track:ini_abadi"},
@@ -307,35 +406,94 @@ class SpotifyClient:
                 artists = ", ".join([a["name"] for a in item.get("artists", [])])
                 images = item.get("album", {}).get("images", [])
                 cover_url = images[-1]["url"] if images else ""
+                t_uri = item.get("uri", "")
+                a_uri = item.get("album", {}).get("uri", "")
+                if t_uri and a_uri:
+                    self._track_album_map[t_uri] = a_uri
                 results.append({
                     "id": item.get("id", ""),
                     "title": item.get("name", "Unknown"),
                     "artist": artists,
+                    "album": item.get("album", {}).get("name", ""),
+                    "album_uri": a_uri,
                     "duration_ms": item.get("duration_ms", 0),
                     "cover_url": cover_url,
-                    "uri": item.get("uri", "")
+                    "uri": t_uri
                 })
             return results
         except Exception as e:
             print(f"[SpotifyClient] search_tracks error: {e}")
             return []
 
-    def add_to_queue(self, uri: str) -> bool:
-        if not self.sp or not uri:
-            return False
+    def add_to_queue(self, uri: str) -> tuple[bool, str]:
+        if not self._ensure_connected() or not uri:
+            return False, "Spotify belum terhubung."
         try:
-            self.sp.add_to_queue(uri)
-            return True
+            real_uri = self._resolve_uri(uri)
+            dev_id, dev_name = self.get_best_device_id()
+            if dev_id:
+                self.sp.add_to_queue(real_uri, device_id=dev_id)
+            else:
+                self.sp.add_to_queue(real_uri)
+            return True, "Berhasil ditambahkan ke antrean"
+        except SpotifyException as se:
+            if se.http_status == 403:
+                return False, "Akun Spotify Free: antrean API memerlukan Spotify Premium."
+            return False, "Gagal menambahkan ke antrean."
         except Exception as e:
             print(f"[SpotifyClient] add_to_queue error: {e}")
-            return False
+            return False, f"Gagal antrean: {e}"
 
-    def play_track(self, uri: str) -> bool:
-        if not self.sp or not uri:
-            return False
+    def play_track(self, uri: str, context_uri: str | None = None) -> tuple[bool, str]:
+        if not self._ensure_connected() or not uri:
+            return False, "Spotify belum terhubung."
         try:
-            self.sp.start_playback(uris=[uri])
-            return True
+            real_uri = self._resolve_uri(uri)
+            dev_id, dev_name = self.get_best_device_id()
+            if not dev_id:
+                return False, dev_name
+
+            album_uri = context_uri or self._track_album_map.get(real_uri, "")
+            if not album_uri and real_uri.startswith("spotify:track:"):
+                try:
+                    tr_info = self.sp.track(real_uri)
+                    if isinstance(tr_info, dict):
+                        album_uri = tr_info.get("album", {}).get("uri", "")
+                        if album_uri:
+                            self._track_album_map[real_uri] = album_uri
+                except Exception:
+                    album_uri = ""
+
+            def _do_start():
+                if album_uri:
+                    self.sp.start_playback(
+                        device_id=dev_id,
+                        context_uri=album_uri,
+                        offset={"uri": real_uri}
+                    )
+                else:
+                    self.sp.start_playback(device_id=dev_id, uris=[real_uri])
+
+            # Explicitly pass device_id and album context_uri + offset so Spotify Desktop plays immediately
+            try:
+                _do_start()
+            except SpotifyException as inner_se:
+                if inner_se.http_status in (404, 502, 503):
+                    import time
+                    self.sp.transfer_playback(device_id=dev_id, force_play=False)
+                    time.sleep(0.3)
+                    _do_start()
+                else:
+                    raise inner_se
+
+            return True, f"Memutar di {dev_name}"
+        except SpotifyException as se:
+            print(f"[SpotifyClient] play_track SpotifyException: {se}")
+            if se.http_status == 403:
+                return False, "Akun Spotify Free: kontrol putar lagu memerlukan Spotify Premium."
+            elif se.http_status == 404:
+                return False, "Tidak ada perangkat aktif. Buka Spotify di PC/HP kamu."
+            return False, f"Spotify error: {se.msg if hasattr(se, 'msg') else 'Gagal memutar'}"
         except Exception as e:
             print(f"[SpotifyClient] play_track error: {e}")
-            return False
+            return False, f"Gagal memutar: {e}"

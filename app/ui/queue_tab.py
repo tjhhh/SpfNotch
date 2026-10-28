@@ -84,6 +84,7 @@ class QueueItemCard(QFrame):
 
         # Index e.g. "01"
         self.idx_lbl = QLabel(idx_str, self)
+        self.idx_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.idx_lbl.setStyleSheet(
             "font-size: 11.5px; font-family: 'Courier New', monospace; font-weight: 600; "
             "color: rgba(255, 255, 255, 0.42); min-width: 20px; background: transparent; border: none;"
@@ -92,6 +93,7 @@ class QueueItemCard(QFrame):
 
         # Real Spotify cover thumbnail (hidden automatically if no Spotify cover)
         self.cover = SpotifyCoverThumbnail(size=34, radius=8.5, parent=self)
+        self.cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.cover.set_pixmap(cover_pixmap)
         self.layout.addWidget(self.cover)
 
@@ -101,10 +103,12 @@ class QueueItemCard(QFrame):
         self.meta_col.setSpacing(2)
 
         self.title_lbl = QLabel(title, self)
+        self.title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.title_lbl.setStyleSheet(
             "font-size: 13px; font-weight: 700; color: #FFFFFF; background: transparent; border: none;"
         )
         self.artist_lbl = QLabel(artist, self)
+        self.artist_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.artist_lbl.setStyleSheet(
             "font-size: 11.5px; color: rgba(255, 255, 255, 0.55); background: transparent; border: none;"
         )
@@ -115,6 +119,7 @@ class QueueItemCard(QFrame):
 
         # "Putar" pill button matching Gambar 2
         self.btn_play = QPushButton("Putar", self)
+        self.btn_play.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_play.setStyleSheet(
             "QPushButton { "
@@ -128,11 +133,12 @@ class QueueItemCard(QFrame):
             "border: 1px solid rgba(255, 255, 255, 0.28); "
             "}"
         )
-        self.btn_play.clicked.connect(self.play_clicked.emit)
+        self.btn_play.clicked.connect(lambda *_: self.play_clicked.emit())
         self.layout.addWidget(self.btn_play)
 
         # "✕" remove button
         self.btn_remove = QPushButton("✕", self)
+        self.btn_remove.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_remove.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_remove.setFixedSize(26, 26)
         self.btn_remove.setStyleSheet(
@@ -144,7 +150,7 @@ class QueueItemCard(QFrame):
             "background: rgba(244, 63, 94, 0.18); color: #FDA4AF; "
             "}"
         )
-        self.btn_remove.clicked.connect(self.remove_clicked.emit)
+        self.btn_remove.clicked.connect(lambda *_: self.remove_clicked.emit())
         self.layout.addWidget(self.btn_remove)
 
         self.setStyleSheet(
@@ -158,6 +164,16 @@ class QueueItemCard(QFrame):
             "border: 1px solid rgba(255, 255, 255, 0.15); "
             "}"
         )
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            pos = ev.pos()
+            if not self.btn_remove.geometry().contains(pos) and not self.btn_play.geometry().contains(pos):
+                self.play_clicked.emit()
+                ev.accept()
+                return
+        super().mousePressEvent(ev)
 
     def set_cover_pixmap(self, pix: QPixmap | None):
         self.cover.set_pixmap(pix)
@@ -170,7 +186,7 @@ class QueueTab(QWidget):
       Putar pill button, and ✕ button.
     """
     refresh_requested = pyqtSignal()
-    play_track_requested = pyqtSignal(str)   # track uri
+    play_track_requested = pyqtSignal(str, object)   # track uri, track dict
     queue_count_changed = pyqtSignal(int)
 
     def __init__(self, parent=None):
@@ -190,6 +206,8 @@ class QueueTab(QWidget):
         # List Widget
         self.list_widget = QListWidget()
         self.list_widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.list_widget.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.list_widget.setSpacing(4)
         self.layout.addWidget(self.list_widget)
 
@@ -234,8 +252,8 @@ class QueueTab(QWidget):
                 cover_pixmap=pix,
                 parent=self
             )
-            card.play_clicked.connect(lambda u=uri: self.play_track_requested.emit(u))
-            card.remove_clicked.connect(lambda idx=i: self._remove_item_at(idx))
+            card.play_clicked.connect(lambda *_, u=uri, it=item: self.play_track_requested.emit(u, it))
+            card.remove_clicked.connect(lambda *_, idx=i: self._remove_item_at(idx))
 
             list_item = QListWidgetItem()
             list_item.setSizeHint(QSize(0, 56))

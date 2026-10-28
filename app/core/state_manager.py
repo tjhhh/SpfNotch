@@ -23,12 +23,15 @@ class StateManager(QObject):
     active_lyric_changed = pyqtSignal(int, str, str)     # line_index, current_text, upcoming_text
     queue_updated = pyqtSignal(list)                # list of queue items
     connection_changed = pyqtSignal(bool)           # is connected
+    track_play_result = pyqtSignal(bool, str)       # success, message
 
     # Internal thread-safe queued signals from background workers to main thread
     _playback_received = pyqtSignal(object)
     _lyrics_received = pyqtSignal(dict)
     _queue_received = pyqtSignal(list)
     _revert_play_state = pyqtSignal(bool)
+    _revert_to_track = pyqtSignal(object, bool)
+    _play_result_received = pyqtSignal(bool, str)
 
     def __init__(self, spotify_client: SpotifyClient, lyrics_client: LyricsClient):
         super().__init__()
@@ -41,6 +44,8 @@ class StateManager(QObject):
         self._lyrics_received.connect(self._on_lyrics_received)
         self._queue_received.connect(self._on_queue_received)
         self._revert_play_state.connect(self._on_revert_play_state)
+        self._revert_to_track.connect(self._on_revert_to_track)
+        self._play_result_received.connect(self._on_play_result_received)
 
         # State tracking
         self.current_track: dict | None = None
@@ -52,6 +57,8 @@ class StateManager(QObject):
         self.last_poll_timestamp: float = time.time()
         self.last_tick_timestamp: float = time.time()
         self.demo_mode: bool = False
+        self._play_lock_until: float = 0.0
+        self._pending_track_uri: str = ""
 
         # Polling Timer (Checks Spotify every 1.5s while playing, 800ms while paused for instant resume)
         self.poll_timer = QTimer(self)
@@ -91,7 +98,13 @@ class StateManager(QObject):
                 self._load_demo_track()
             return
 
+        self.demo_mode = False
+        now = time.time()
+        in_play_lock = now < self._play_lock_until
+
         if not playback:
+            if in_play_lock:
+                return
             if self.is_playing:
                 self.is_playing = False
                 self.tick_timer.stop()
@@ -100,6 +113,14 @@ class StateManager(QObject):
                     self.playback_state_changed.emit(self.current_track)
             self.connection_changed.emit(True)
             return
+
+        if in_play_lock and self._pending_track_uri and playback.get("uri") != self._pending_track_uri:
+            # Ignore stale poll response while Spotify is transitioning to the newly requested track
+            return
+
+        if self._pending_track_uri and playback.get("uri") == self._pending_track_uri:
+            self._play_lock_until = 0.0
+            self._pending_track_uri = ""
 
         self.connection_changed.emit(True)
         prev_track_id = self.current_track.get("track_id") if self.current_track else None
@@ -294,6 +315,126 @@ class StateManager(QObject):
         if self.current_track:
             self.current_track["is_playing"] = self.is_playing
             self.playback_state_changed.emit(self.current_track)
+
+    def _on_revert_to_track(self, old_track: dict | None, old_playing: bool):
+        """Runs safely on MAIN GUI THREAD to restore track metadata if remote play failed"""
+        self.current_track = old_track
+        self.is_playing = old_playing
+        if self.is_playing:
+            self.last_tick_timestamp = time.time()
+            if not self.tick_timer.isActive():
+                self.tick_timer.start(self.tick_interval_ms)
+        else:
+            self.tick_timer.stop()
+        if self.current_track:
+            self.current_track["is_playing"] = self.is_playing
+            self.playback_state_changed.emit(self.current_track)
+
+    def _on_play_result_received(self, success: bool, message: str):
+        """Emits play result status to UI on the main thread"""
+        self.track_play_result.emit(success, message)
+
+    def play_track(self, uri: str, track_meta: dict | None = None):
+        """
+        Plays a track by URI with optimistic UI update and multi-mode support (Spotify or Demo).
+        """
+        if not uri:
+            return
+
+        # 1. Demo Mode or Offline Mode
+        if self.demo_mode or not self.spotify.is_connected:
+            title = track_meta.get("title", "Lagu Demo") if track_meta else "Lagu Demo"
+            artist = track_meta.get("artist", "") if track_meta else ""
+            cover_url = track_meta.get("cover_url", "") if track_meta else ""
+            dur_ms = track_meta.get("duration_ms", 210000) if track_meta else 210000
+
+            new_track = {
+                "is_playing": True,
+                "track_id": track_meta.get("id", uri) if track_meta else uri,
+                "title": title,
+                "artist": artist,
+                "album": "Single",
+                "cover_url": cover_url,
+                "progress_ms": 0,
+                "duration_ms": dur_ms,
+                "uri": uri
+            }
+            self.current_track = new_track
+            self.current_progress_ms = 0
+            self.duration_ms = dur_ms
+            self.is_playing = True
+            self.last_tick_timestamp = time.time()
+            if not self.tick_timer.isActive():
+                self.tick_timer.start(self.tick_interval_ms)
+            self.playback_state_changed.emit(new_track)
+            self._fetch_lyrics_and_queue(new_track)
+            self.track_play_result.emit(True, f"Memutar (Demo): {title[:20]}")
+            return
+
+        # 2. Spotify Connected Mode (Optimistic UI Update + Background API Call)
+        self.demo_mode = False
+        old_track = self.current_track.copy() if self.current_track else None
+        old_playing = self.is_playing
+        self._play_lock_until = time.time() + 2.8
+        self._pending_track_uri = uri
+
+        if track_meta:
+            optimistic_track = {
+                "is_playing": True,
+                "track_id": track_meta.get("id", uri),
+                "title": track_meta.get("title", "Memuat..."),
+                "artist": track_meta.get("artist", ""),
+                "album": track_meta.get("album", ""),
+                "cover_url": track_meta.get("cover_url", ""),
+                "progress_ms": 0,
+                "duration_ms": track_meta.get("duration_ms", 0),
+                "uri": uri
+            }
+            self.current_track = optimistic_track
+            self.current_progress_ms = 0
+            self.duration_ms = max(1, optimistic_track["duration_ms"])
+            self.is_playing = True
+            self.last_tick_timestamp = time.time()
+            if not self.tick_timer.isActive():
+                self.tick_timer.start(self.tick_interval_ms)
+            self.playback_state_changed.emit(optimistic_track)
+            self._emit_progress()
+            self.current_lyrics = None
+            self.active_lyric_idx = -1
+            self.active_lyric_changed.emit(-1, "", "")
+            self._fetch_lyrics_and_queue(optimistic_track)
+
+        album_uri = track_meta.get("album_uri", "") if isinstance(track_meta, dict) else ""
+
+        def bg_worker():
+            success, message = self.spotify.play_track(uri, context_uri=album_uri)
+            self._play_result_received.emit(success, message)
+            if success:
+                time.sleep(0.5)
+                self._bg_fetch_playback()
+                time.sleep(0.9)
+                self._bg_fetch_playback()
+            else:
+                self._play_lock_until = 0.0
+                self._pending_track_uri = ""
+                if old_track:
+                    self._revert_to_track.emit(old_track, old_playing)
+
+        self.thread_pool.start(WorkerTask(bg_worker))
+
+    def add_to_queue(self, uri: str, track_meta: dict | None = None):
+        if self.demo_mode or not self.spotify.is_connected:
+            self.track_play_result.emit(True, "Ditambahkan ke antrean (Demo)")
+            return
+
+        def bg_worker():
+            success, msg = self.spotify.add_to_queue(uri)
+            self._play_result_received.emit(success, msg)
+            if success:
+                time.sleep(0.4)
+                self.fetch_queue()
+
+        self.thread_pool.start(WorkerTask(bg_worker))
 
     def fetch_queue(self):
         def bg_work():

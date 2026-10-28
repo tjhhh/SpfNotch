@@ -73,6 +73,7 @@ class SearchItemCard(QFrame):
 
         # Real Spotify cover thumbnail (hidden automatically if no Spotify cover)
         self.cover = SpotifyCoverThumbnail(size=36, radius=8.5, parent=self)
+        self.cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.cover.set_pixmap(cover_pixmap)
         self.layout.addWidget(self.cover)
 
@@ -82,12 +83,14 @@ class SearchItemCard(QFrame):
         self.meta_col.setSpacing(2)
 
         self.title_lbl = QLabel(title, self)
+        self.title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.title_lbl.setStyleSheet(
             "font-size: 13px; font-weight: 700; color: #FFFFFF; background: transparent; border: none;"
         )
 
         detail_text = f"{artist} • {duration_str}" if duration_str else artist
         self.detail_lbl = QLabel(detail_text, self)
+        self.detail_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.detail_lbl.setStyleSheet(
             "font-size: 11px; color: rgba(255, 255, 255, 0.55); background: transparent; border: none;"
         )
@@ -98,6 +101,7 @@ class SearchItemCard(QFrame):
 
         # "▶" Play Button
         self.btn_play = QPushButton("▶", self)
+        self.btn_play.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_play.setFixedSize(30, 30)
         self.btn_play.setStyleSheet(
@@ -110,11 +114,12 @@ class SearchItemCard(QFrame):
             "background: #FFFFFF; color: #090A0F; "
             "}"
         )
-        self.btn_play.clicked.connect(self.play_clicked.emit)
+        self.btn_play.clicked.connect(lambda *_: self.play_clicked.emit())
         self.layout.addWidget(self.btn_play)
 
         # "+ Antrean" Button
         self.btn_queue = QPushButton("+ Antrean", self)
+        self.btn_queue.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_queue.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_queue.setStyleSheet(
             "QPushButton { "
@@ -128,7 +133,7 @@ class SearchItemCard(QFrame):
             f"border: 1px solid {accent_color}; "
             "}"
         )
-        self.btn_queue.clicked.connect(self.queue_clicked.emit)
+        self.btn_queue.clicked.connect(lambda *_: self.queue_clicked.emit())
         self.layout.addWidget(self.btn_queue)
 
         self.setStyleSheet(
@@ -138,8 +143,33 @@ class SearchItemCard(QFrame):
             "border-radius: 13px; "
             "} "
             "#searchCard:hover { "
-            "background: rgba(255, 255, 255, 0.08); "
-            "border: 1px solid rgba(255, 255, 255, 0.15); "
+            "background: rgba(255, 255, 255, 0.09); "
+            "border: 1px solid rgba(255, 255, 255, 0.18); "
+            "}"
+        )
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            pos = ev.pos()
+            if not self.btn_queue.geometry().contains(pos) and not self.btn_play.geometry().contains(pos):
+                self.play_clicked.emit()
+                ev.accept()
+                return
+        super().mousePressEvent(ev)
+
+    def set_accent_color(self, accent_color: str):
+        self.accent_color = accent_color
+        self.btn_queue.setStyleSheet(
+            "QPushButton { "
+            f"background: {accent_color}1C; "
+            f"border: 1px solid {accent_color}55; "
+            "color: #FFFFFF; font-size: 11px; font-weight: 600; "
+            "padding: 5px 11px; border-radius: 8px; "
+            "} "
+            "QPushButton:hover { "
+            f"background: {accent_color}38; "
+            f"border: 1px solid {accent_color}; "
             "}"
         )
 
@@ -154,8 +184,8 @@ class SearchTab(QWidget):
     - Sleek card rows with real Spotify cover art (or hidden if unavailable), play, and + Antrean buttons
     """
     search_requested = pyqtSignal(str)
-    add_queue_requested = pyqtSignal(str)   # track uri
-    play_track_requested = pyqtSignal(str)  # track uri
+    add_queue_requested = pyqtSignal(str, object)   # track uri, track dict
+    play_track_requested = pyqtSignal(str, object)  # track uri, track dict
     input_focused = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -220,9 +250,13 @@ class SearchTab(QWidget):
         self.layout.addWidget(self.status_lbl)
 
         # Results List
+        self._last_play_click_ts = 0.0
         self.results_list = QListWidget()
         self.results_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.results_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.results_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.results_list.setSpacing(4)
+        self.results_list.itemClicked.connect(self._on_list_item_clicked)
         self.layout.addWidget(self.results_list)
 
         # Hint
@@ -236,6 +270,17 @@ class SearchTab(QWidget):
 
     def set_accent_color(self, hex_color: str):
         self.accent_color = hex_color
+        self.status_lbl.setStyleSheet(f"color: {hex_color}; font-size: 10.5px; font-weight: bold;")
+        self.count_badge.setStyleSheet(
+            f"font-size: 9.5px; font-family: 'Courier New', monospace; font-weight: 700; "
+            f"color: {hex_color}; background: {hex_color}22; "
+            "padding: 2px 7px; border-radius: 6px; border: none;"
+        )
+        for i in range(self.results_list.count()):
+            item = self.results_list.item(i)
+            widget = self.results_list.itemWidget(item)
+            if hasattr(widget, "set_accent_color"):
+                widget.set_accent_color(hex_color)
 
     def _on_enter_pressed(self):
         self.debounce_timer.stop()
@@ -297,13 +342,19 @@ class SearchTab(QWidget):
                 accent_color=self.accent_color,
                 parent=self
             )
-            card.play_clicked.connect(lambda u=uri, t=title: self._on_play_clicked(u, t))
-            card.queue_clicked.connect(lambda u=uri, t=title: self._on_queue_clicked(u, t))
+            card.play_clicked.connect(lambda *_, t=track: self._on_play_clicked(t))
+            card.queue_clicked.connect(lambda *_, t=track: self._on_queue_clicked(t))
 
             list_item = QListWidgetItem()
+            list_item.setData(Qt.ItemDataRole.UserRole, track)
             list_item.setSizeHint(QSize(0, 54))
             self.results_list.addItem(list_item)
             self.results_list.setItemWidget(list_item, card)
+
+    def _on_list_item_clicked(self, item: QListWidgetItem):
+        track = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(track, dict):
+            self._on_play_clicked(track)
 
     def update_cover(self, url: str, raw_pixmap: QPixmap):
         if not url or raw_pixmap is None or raw_pixmap.isNull():
@@ -318,15 +369,45 @@ class SearchTab(QWidget):
             if isinstance(card, SearchItemCard) and card.cover_url == url:
                 card.set_cover_pixmap(pix)
 
-    def _on_play_clicked(self, uri: str, title: str):
-        self.play_track_requested.emit(uri)
-        self._show_toast(f"Memutar: {title[:22]}...")
+    def _on_play_clicked(self, track: dict):
+        import time
+        now = time.time()
+        if now - self._last_play_click_ts < 0.25:
+            return
+        self._last_play_click_ts = now
+        uri = track.get("uri", "")
+        title = track.get("title", "Lagu")
+        self.play_track_requested.emit(uri, track)
+        self.show_feedback(True, f"Memuat: {title[:20]}...", is_loading=True)
 
-    def _on_queue_clicked(self, uri: str, title: str):
-        self.add_queue_requested.emit(uri)
-        self._show_toast(f"Ditambahkan ke antrean: {title[:18]}...")
+    def _on_queue_clicked(self, track: dict):
+        uri = track.get("uri", "")
+        title = track.get("title", "Lagu")
+        self.add_queue_requested.emit(uri, track)
+        self.show_feedback(True, f"Menambahkan ke antrean: {title[:16]}...", is_loading=True)
+
+    def show_feedback(self, success: bool, message: str, is_loading: bool = False):
+        if is_loading:
+            color = self.accent_color
+            prefix = "⏳ "
+        elif success:
+            color = "#1DB954"
+            prefix = "▶ "
+        else:
+            color = "#F87171"
+            prefix = "⚠ "
+
+        self.status_lbl.setText(f"{prefix}{message}")
+        self.status_lbl.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: 600; padding: 2px 4px;")
+        self.status_lbl.setVisible(True)
+
+        if hasattr(self, "_feedback_timer") and self._feedback_timer.isActive():
+            self._feedback_timer.stop()
+
+        self._feedback_timer = QTimer(self)
+        self._feedback_timer.setSingleShot(True)
+        self._feedback_timer.timeout.connect(lambda: self.status_lbl.setVisible(False))
+        self._feedback_timer.start(3500 if not is_loading else 6000)
 
     def _show_toast(self, msg: str):
-        self.status_lbl.setText(msg)
-        self.status_lbl.setVisible(True)
-        QTimer.singleShot(2500, lambda: self.status_lbl.setVisible(False))
+        self.show_feedback(True, msg)

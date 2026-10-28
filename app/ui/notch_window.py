@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from PyQt6.QtWidgets import QWidget, QApplication, QVBoxLayout
 from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QSequentialAnimationGroup, QEasingCurve, QTimer, pyqtProperty, pyqtSignal
 from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QBrush, QCursor, QFontDatabase, QIcon, QRadialGradient, QPixmap
@@ -8,6 +9,7 @@ from app.ui.pill_view import PillView
 from app.ui.expanded_view import ExpandedView
 from app.ui.styles import NOTCH_STYLESHEET
 from app.utils.win32_helpers import set_no_activate, set_tool_window, activate_window_focus
+from app.utils.color_helpers import extract_dominant_color, get_secondary_complement
 from app.core.state_manager import WorkerTask
 
 class NotchWindow(QWidget):
@@ -40,9 +42,10 @@ class NotchWindow(QWidget):
         self.specular_rim = personal_cfg.get("specular_border", 0.18)
         self.chroma_glow = personal_cfg.get("chroma_glow", 0.25)
         self.notch_morph = personal_cfg.get("notch_morph", "hardware-flush")
-        self.accent_color = "#34D399"
-        self.chroma_color_1 = QColor(239, 68, 68)    # Warm red/amber default matching Ora Urus cover
-        self.chroma_color_2 = QColor(52, 211, 153)   # Emerald accent
+        self.accent_mode = personal_cfg.get("accent_mode", "preset")
+        self.accent_color = personal_cfg.get("accent_color", "#34D399")
+        self.chroma_color_1 = QColor(self.accent_color)
+        self.chroma_color_2 = QColor(get_secondary_complement(self.accent_color))
 
         self.is_expanded = False
         self._current_rect = QRect(0, 0, self.col_w, self.col_h)
@@ -81,6 +84,11 @@ class NotchWindow(QWidget):
         # Share ImageCache with QueueTab and SearchTab for real Spotify album covers
         self.expanded_view.queue_tab.set_image_cache(self.img_cache)
         self.expanded_view.search_tab.set_image_cache(self.img_cache)
+
+        # Initialize accent color across views
+        self.pill_view.set_accent_color(self.accent_color)
+        self.expanded_view.set_accent_color(self.accent_color)
+        self.expanded_view.settings_tab.set_initial_accent(self.accent_mode, self.accent_color)
 
         self.main_layout.addWidget(self.pill_view)
         self.main_layout.addWidget(self.expanded_view)
@@ -220,6 +228,7 @@ class NotchWindow(QWidget):
         self.expanded_view.search_tab.play_track_requested.connect(self._on_play_track)
         self.expanded_view.search_tab.add_queue_requested.connect(self._on_add_queue)
         self.search_results_ready.connect(self.expanded_view.search_tab.set_results)
+        self.state_mgr.track_play_result.connect(self.expanded_view.search_tab.show_feedback)
 
         # Settings tab credentials
         self.expanded_view.settings_tab.credentials_saved.connect(self._on_credentials_saved)
@@ -231,23 +240,68 @@ class NotchWindow(QWidget):
         self.specular_rim = data.get("specular_border", self.specular_rim)
         self.chroma_glow = data.get("chroma_glow", self.chroma_glow)
         self.notch_morph = data.get("notch_morph", self.notch_morph)
+
+        if "accent_mode" in data:
+            self.accent_mode = data["accent_mode"]
+
+        if self.accent_mode in ("preset", "custom") and "accent_color" in data:
+            self.accent_color = data["accent_color"]
+            self.chroma_color_1 = QColor(self.accent_color)
+            self.chroma_color_2 = QColor(get_secondary_complement(self.accent_color))
+            self.pill_view.set_accent_color(self.accent_color)
+            self.expanded_view.set_accent_color(self.accent_color)
+        elif self.accent_mode == "auto":
+            curr_pix = self.pill_view.current_cover
+            if curr_pix and not curr_pix.isNull():
+                self.accent_color = extract_dominant_color(curr_pix)
+            else:
+                self.accent_color = "#34D399"
+            self.chroma_color_1 = QColor(self.accent_color)
+            self.chroma_color_2 = QColor(get_secondary_complement(self.accent_color))
+            self.pill_view.set_accent_color(self.accent_color)
+            self.expanded_view.set_accent_color(self.accent_color)
+
+        self._save_personalization_to_config()
         self.update()
 
-    def _on_play_track(self, uri: str):
-        def bg_play():
-            self.state_mgr.spotify.play_track(uri)
-            import time
-            time.sleep(0.4)
-            self.state_mgr._bg_fetch_playback()
-        self.state_mgr.thread_pool.start(WorkerTask(bg_play))
+    def _save_personalization_to_config(self):
+        try:
+            cfg_path = getattr(self.state_mgr.spotify, "config_path", None)
+            if not cfg_path or not os.path.exists(cfg_path):
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                cfg_path = os.path.join(base_dir, "config.json")
 
-    def _on_add_queue(self, uri: str):
-        def bg_queue():
-            self.state_mgr.spotify.add_to_queue(uri)
-            import time
-            time.sleep(0.3)
-            self.state_mgr.fetch_queue()
-        self.state_mgr.thread_pool.start(WorkerTask(bg_queue))
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg_data = json.load(f)
+            else:
+                cfg_data = {}
+
+            if "personalization" not in cfg_data:
+                cfg_data["personalization"] = {}
+
+            p = cfg_data["personalization"]
+            p["preset"] = self.expanded_view.settings_tab.selected_preset_id
+            p["opacity"] = self.glass_opacity
+            p["blur"] = self.expanded_view.settings_tab.glass_blur
+            p["specular_border"] = self.specular_rim
+            p["chroma_glow"] = self.chroma_glow
+            p["tint_rgb"] = self.tint_rgb
+            p["notch_morph"] = self.notch_morph
+            p["scrubber_style"] = self.expanded_view.settings_tab.scrubber_style
+            p["accent_mode"] = self.accent_mode
+            p["accent_color"] = self.accent_color
+
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg_data, f, indent=2)
+        except Exception as e:
+            print(f"[NotchWindow] Error saving personalization: {e}")
+
+    def _on_play_track(self, uri: str, track_meta: dict | None = None):
+        self.state_mgr.play_track(uri, track_meta)
+
+    def _on_add_queue(self, uri: str, track_meta: dict | None = None):
+        self.state_mgr.add_to_queue(uri, track_meta)
 
     def _on_input_focused(self):
         hwnd = int(self.winId())
@@ -282,30 +336,26 @@ class NotchWindow(QWidget):
             self.state_mgr._poll_spotify()
 
     def _on_search(self, query: str):
+        self._search_seq = getattr(self, "_search_seq", 0) + 1
+        req_seq = self._search_seq
         def bg_search():
             tracks = self.state_mgr.spotify.search_tracks(query)
-            self.search_results_ready.emit(tracks)
+            if getattr(self, "_search_seq", 0) == req_seq:
+                self.search_results_ready.emit(tracks)
         self.state_mgr.thread_pool.start(WorkerTask(bg_search))
 
     def _extract_dominant_colors(self, pixmap: QPixmap | None):
-        """Extracts two vibrant dominant colors from the album cover using built-in QImage"""
-        if pixmap is None or pixmap.isNull():
-            self.chroma_color_1 = QColor(239, 68, 68)
-            self.chroma_color_2 = QColor(52, 211, 153)
-            return
-
-        img = pixmap.toImage().scaled(6, 6, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
-        c1 = img.pixelColor(1, 1)
-        c2 = img.pixelColor(4, 4)
-
-        # Boost saturation slightly so ambient bleed looks vibrant
-        if c1.saturation() < 80:
-            c1 = QColor.fromHsv(c1.hue() if c1.hue() >= 0 else 150, 140, max(160, c1.value()))
-        if c2.saturation() < 80:
-            c2 = QColor(52, 211, 153)
-
-        self.chroma_color_1 = c1
-        self.chroma_color_2 = c2
+        """Extracts dominant colors from the album cover or applies user-selected accent"""
+        if self.accent_mode == "auto":
+            dom_hex = extract_dominant_color(pixmap)
+            self.accent_color = dom_hex
+            self.chroma_color_1 = QColor(self.accent_color)
+            self.chroma_color_2 = QColor(get_secondary_complement(self.accent_color))
+            self.pill_view.set_accent_color(self.accent_color)
+            self.expanded_view.set_accent_color(self.accent_color)
+        else:
+            self.chroma_color_1 = QColor(self.accent_color)
+            self.chroma_color_2 = QColor(get_secondary_complement(self.accent_color))
         self.update()
 
     def _on_playback_state(self, track: dict):
@@ -507,16 +557,18 @@ class NotchWindow(QWidget):
 
         # Ambient Chromatic Glow (dynamic album cover accent bleed matching Gambar 1-3)
         if self.chroma_glow > 0.05:
-            # Top-left warm/primary cover ambient orb
+            # Top-left primary accent ambient orb
             glow_grad1 = QRadialGradient(w * 0.16, 15.0, w * 0.58)
             c1 = QColor(self.chroma_color_1)
             c1.setAlpha(min(180, int(self.chroma_glow * 115)))
             glow_grad1.setColorAt(0.0, c1)
-            glow_grad1.setColorAt(0.55, QColor(234, 179, 8, min(140, int(self.chroma_glow * 75))))
+            c1_mid = QColor(self.chroma_color_1)
+            c1_mid.setAlpha(min(140, int(self.chroma_glow * 45)))
+            glow_grad1.setColorAt(0.60, c1_mid)
             glow_grad1.setColorAt(1.0, QColor(0, 0, 0, 0))
             painter.fillPath(path, QBrush(glow_grad1))
 
-            # Bottom-right secondary/emerald ambient orb
+            # Bottom-right secondary complement ambient orb
             glow_grad2 = QRadialGradient(w * 0.85, h * 0.85, w * 0.55)
             c2 = QColor(self.chroma_color_2)
             c2.setAlpha(min(150, int(self.chroma_glow * 80)))

@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QLineEdit, QLabel, 
-    QPushButton, QComboBox, QSlider, QStackedWidget, QApplication, QScrollArea
+    QPushButton, QComboBox, QSlider, QStackedWidget, QApplication, QScrollArea,
+    QColorDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -92,6 +93,56 @@ class PresetCardButton(QFrame):
             )
 
 
+class ColorSwatchButton(QPushButton):
+    """
+    Circular color swatch button with active specular ring and tooltip matching Figma.
+    """
+    def __init__(self, swatch_id: str, name: str, hex_color: str | None = None, parent=None):
+        super().__init__(parent)
+        self.swatch_id = swatch_id
+        self.swatch_name = name
+        self.hex_color = hex_color
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        if hex_color:
+            self.setToolTip(f"{name} ({hex_color})")
+        else:
+            self.setToolTip(f"{name} - Dinamis dari sampul lagu")
+        self.set_selected(False)
+
+    def set_selected(self, selected: bool):
+        if self.swatch_id == "auto":
+            bg = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #F43F5E, stop:0.33 #F59E0B, stop:0.66 #10B981, stop:1 #38BDF8)"
+            if selected:
+                self.setStyleSheet(
+                    f"QPushButton {{ background: {bg}; border: 2.5px solid #FFFFFF; border-radius: 13px; font-size: 11px; }} "
+                    f"QPushButton:hover {{ border: 2.5px solid #FFFFFF; }}"
+                )
+                self.setText("🌈")
+            else:
+                self.setStyleSheet(
+                    f"QPushButton {{ background: {bg}; border: 1.5px solid rgba(255, 255, 255, 0.25); border-radius: 13px; font-size: 10px; }} "
+                    f"QPushButton:hover {{ border: 2px solid rgba(255, 255, 255, 0.70); }}"
+                )
+                self.setText("🌈")
+        else:
+            c = self.hex_color or "#34D399"
+            if selected:
+                is_bright = c.lower() in ("#e2e8f0", "#ffffff", "#34d399", "#38bdf8", "#f59e0b")
+                txt_color = "#090A0F" if is_bright else "#FFFFFF"
+                self.setStyleSheet(
+                    f"QPushButton {{ background: {c}; border: 2.5px solid #FFFFFF; border-radius: 13px; font-size: 11px; font-weight: bold; color: {txt_color}; }} "
+                    f"QPushButton:hover {{ border: 2.5px solid #FFFFFF; }}"
+                )
+                self.setText("✓")
+            else:
+                self.setStyleSheet(
+                    f"QPushButton {{ background: {c}; border: 1.5px solid rgba(255, 255, 255, 0.20); border-radius: 13px; }} "
+                    f"QPushButton:hover {{ border: 2px solid rgba(255, 255, 255, 0.70); }}"
+                )
+                self.setText("")
+
+
 class SettingsTab(QWidget):
     """
     Redesigned Personalisasi UI + Pengaturan Tab matching Gambar 3.
@@ -168,6 +219,16 @@ class SettingsTab(QWidget):
         }
     ]
 
+    CHROMA_SWATCHES = [
+        {"id": "auto", "name": "Auto (Sampul)", "hex": None},
+        {"id": "mint", "name": "Emerald Mint", "hex": "#34D399"},
+        {"id": "cyan", "name": "Electric Cyan", "hex": "#38BDF8"},
+        {"id": "violet", "name": "Cyber Violet", "hex": "#A855F7"},
+        {"id": "rose", "name": "Neon Rose", "hex": "#FB7185"},
+        {"id": "amber", "name": "Solar Amber", "hex": "#F59E0B"},
+        {"id": "silver", "name": "Ice Silver", "hex": "#E2E8F0"},
+    ]
+
     def __init__(self, current_client_id: str = "", current_client_secret: str = "", parent=None):
         super().__init__(parent)
         self.selected_preset_id = "default-black"
@@ -178,6 +239,9 @@ class SettingsTab(QWidget):
         self.tint_rgb = "9, 10, 15"
         self.notch_morph = "hardware-flush"
         self.scrubber_style = "waveform"
+        self.accent_mode = "preset"
+        self.current_accent = "#34D399"
+        self.swatch_buttons: dict[str, ColorSwatchButton] = {}
 
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(4, 4, 4, 2)
@@ -211,14 +275,16 @@ class SettingsTab(QWidget):
         self.content_layout.setSpacing(11)
 
         self._build_section_1_glass_presets()
-        self._build_section_2_morphology()
-        self._build_section_3_spotify_settings(current_client_id, current_client_secret)
+        self._build_section_2_chroma_accent()
+        self._build_section_3_morphology()
+        self._build_section_4_spotify_settings(current_client_id, current_client_secret)
 
         self.scroll_area.setWidget(self.scroll_content)
         self.layout.addWidget(self.scroll_area, 1)
 
         self._update_preset_button_styles()
         self._update_morph_button_styles()
+        self._update_swatch_styles()
 
     def _switch_subtab(self, index: int):
         self.stacked.setCurrentIndex(index)
@@ -355,24 +421,157 @@ class SettingsTab(QWidget):
         self.content_layout.addWidget(self.sliders_card)
 
     # =========================================================================
-    # SECTION 2: MORFOLOGI NOTCH & TIMELINE (Scroll Down)
+    # SECTION 2: CHROMA ACCENT COLOR & AMBIENT GLOW (Gambar 3 / Figma)
     # =========================================================================
-    def _build_section_2_morphology(self):
-        sec2_head = QHBoxLayout()
-        sec2_head.setContentsMargins(0, 12, 0, 0)
-        lbl_sec2 = QLabel("2. MORFOLOGI NOTCH & TIMELINE")
-        lbl_sec2.setStyleSheet(
+    def _build_section_2_chroma_accent(self):
+        sec_head = QHBoxLayout()
+        sec_head.setContentsMargins(0, 8, 0, 0)
+        lbl_sec = QLabel("2. CHROMA ACCENT COLOR")
+        lbl_sec.setStyleSheet(
             "font-size: 10px; font-family: 'Courier New', monospace; font-weight: 700; "
             "color: rgba(255, 255, 255, 0.50); letter-spacing: 0.8px;"
         )
-        sec2_head.addWidget(lbl_sec2)
-        sec2_head.addStretch()
+        sec_head.addWidget(lbl_sec)
+        sec_head.addStretch()
+
+        self.lbl_accent_tag = QLabel(self.current_accent)
+        self.lbl_accent_tag.setStyleSheet(
+            f"font-size: 9.5px; font-family: 'Courier New', monospace; font-weight: 700; "
+            f"color: {self.current_accent}; background: {self.current_accent}22; "
+            "padding: 2px 7px; border-radius: 5px; border: none;"
+        )
+        sec_head.addWidget(self.lbl_accent_tag)
+        self.content_layout.addLayout(sec_head)
+
+        # Swatch bar frame
+        swatch_card = QFrame(self.scroll_content)
+        swatch_card.setObjectName("swatchGlassCard")
+        swatch_card.setStyleSheet(
+            "#swatchGlassCard { "
+            "background: rgba(0, 0, 0, 0.28); "
+            "border: 1px solid rgba(255, 255, 255, 0.08); "
+            "border-radius: 14px; "
+            "}"
+        )
+        swatch_layout = QHBoxLayout(swatch_card)
+        swatch_layout.setContentsMargins(12, 8, 12, 8)
+        swatch_layout.setSpacing(8)
+
+        self.swatch_buttons = {}
+        for s in self.CHROMA_SWATCHES:
+            btn = ColorSwatchButton(s["id"], s["name"], s["hex"], parent=swatch_card)
+            btn.clicked.connect(lambda checked=False, sid=s["id"], hex_val=s["hex"]: self._on_swatch_clicked(sid, hex_val))
+            self.swatch_buttons[s["id"]] = btn
+            swatch_layout.addWidget(btn)
+
+        swatch_layout.addStretch()
+
+        # Custom Color Picker button
+        self.btn_custom_color = QPushButton("+ Kustom...", swatch_card)
+        self.btn_custom_color.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_custom_color.setStyleSheet(
+            "QPushButton { "
+            "background: rgba(255, 255, 255, 0.07); "
+            "border: 1px solid rgba(255, 255, 255, 0.15); "
+            "color: rgba(255, 255, 255, 0.85); font-size: 10.5px; font-family: 'Courier New', monospace; "
+            "padding: 4px 10px; border-radius: 8px; font-weight: 600; "
+            "} "
+            "QPushButton:hover { "
+            "background: rgba(255, 255, 255, 0.15); "
+            "border: 1px solid rgba(255, 255, 255, 0.35); "
+            "color: #FFFFFF; "
+            "}"
+        )
+        self.btn_custom_color.clicked.connect(self._open_custom_color_dialog)
+        swatch_layout.addWidget(self.btn_custom_color)
+
+        self.content_layout.addWidget(swatch_card)
+
+    def _on_swatch_clicked(self, swatch_id: str, hex_val: str | None):
+        if swatch_id == "auto":
+            self.set_chroma_accent("auto", None)
+        else:
+            self.set_chroma_accent("preset", hex_val)
+
+    def _open_custom_color_dialog(self):
+        initial = QColor(self.current_accent if self.current_accent else "#34D399")
+        color = QColorDialog.getColor(initial, self, "Pilih Warna Aksen Kustom")
+        if color.isValid():
+            hex_val = color.name().upper()
+            self.set_chroma_accent("custom", hex_val)
+
+    def set_chroma_accent(self, mode: str, color_hex: str | None = None):
+        self.accent_mode = mode
+        if mode == "auto":
+            self.lbl_accent_tag.setText("AUTO (SAMPUL)")
+            self.lbl_accent_tag.setStyleSheet(
+                "font-size: 9px; font-family: 'Courier New', monospace; font-weight: 700; "
+                "color: #38BDF8; background: rgba(56, 189, 248, 0.14); "
+                "padding: 2px 7px; border-radius: 5px; border: none;"
+            )
+        else:
+            if color_hex:
+                self.current_accent = color_hex.upper()
+            self.lbl_accent_tag.setText(self.current_accent)
+            self.lbl_accent_tag.setStyleSheet(
+                f"font-size: 9.5px; font-family: 'Courier New', monospace; font-weight: 700; "
+                f"color: {self.current_accent}; background: {self.current_accent}22; "
+                "padding: 2px 7px; border-radius: 5px; border: none;"
+            )
+
+        self._update_swatch_styles()
+        self._emit_personalization()
+
+    def set_initial_accent(self, mode: str, color_hex: str = "#34D399"):
+        self.accent_mode = mode
+        if color_hex:
+            self.current_accent = color_hex.upper()
+        if mode == "auto":
+            self.lbl_accent_tag.setText("AUTO (SAMPUL)")
+            self.lbl_accent_tag.setStyleSheet(
+                "font-size: 9px; font-family: 'Courier New', monospace; font-weight: 700; "
+                "color: #38BDF8; background: rgba(56, 189, 248, 0.14); "
+                "padding: 2px 7px; border-radius: 5px; border: none;"
+            )
+        else:
+            self.lbl_accent_tag.setText(self.current_accent)
+            self.lbl_accent_tag.setStyleSheet(
+                f"font-size: 9.5px; font-family: 'Courier New', monospace; font-weight: 700; "
+                f"color: {self.current_accent}; background: {self.current_accent}22; "
+                "padding: 2px 7px; border-radius: 5px; border: none;"
+            )
+        self._update_swatch_styles()
+
+    def _update_swatch_styles(self):
+        if not hasattr(self, "swatch_buttons"):
+            return
+        for sid, btn in self.swatch_buttons.items():
+            if self.accent_mode == "auto":
+                btn.set_selected(sid == "auto")
+            elif self.accent_mode == "preset":
+                btn.set_selected(sid != "auto" and btn.hex_color and btn.hex_color.upper() == self.current_accent.upper())
+            else:  # custom
+                btn.set_selected(False)
+
+    # =========================================================================
+    # SECTION 3: MORFOLOGI NOTCH & TIMELINE (Scroll Down)
+    # =========================================================================
+    def _build_section_3_morphology(self):
+        sec3_head = QHBoxLayout()
+        sec3_head.setContentsMargins(0, 10, 0, 0)
+        lbl_sec3 = QLabel("3. MORFOLOGI NOTCH & TIMELINE")
+        lbl_sec3.setStyleSheet(
+            "font-size: 10px; font-family: 'Courier New', monospace; font-weight: 700; "
+            "color: rgba(255, 255, 255, 0.50); letter-spacing: 0.8px;"
+        )
+        sec3_head.addWidget(lbl_sec3)
+        sec3_head.addStretch()
 
         self.btn_reset_black = QPushButton("↺ Mode Hitam (Default)")
         self.btn_reset_black.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_reset_black.clicked.connect(lambda: self.apply_preset(self.PRESETS[0]))
-        sec2_head.addWidget(self.btn_reset_black)
-        self.content_layout.addLayout(sec2_head)
+        sec3_head.addWidget(self.btn_reset_black)
+        self.content_layout.addLayout(sec3_head)
 
         morph_row = QHBoxLayout()
         morph_row.setSpacing(6)
@@ -407,16 +606,19 @@ class SettingsTab(QWidget):
 
         self.content_layout.addLayout(morph_row)
 
+    # Backward compatibility alias
+    _build_section_2_morphology = _build_section_3_morphology
+
     # =========================================================================
-    # SECTION 3: PENGATURAN AKUN & SPOTIFY API (Scroll Down)
+    # SECTION 4: PENGATURAN AKUN & SPOTIFY API (Scroll Down)
     # =========================================================================
-    def _build_section_3_spotify_settings(self, current_client_id: str, current_client_secret: str):
-        lbl_sec3 = QLabel("3. PENGATURAN SPOTIFY API & SISTEM")
-        lbl_sec3.setStyleSheet(
+    def _build_section_4_spotify_settings(self, current_client_id: str, current_client_secret: str):
+        lbl_sec4 = QLabel("4. PENGATURAN SPOTIFY API & SISTEM")
+        lbl_sec4.setStyleSheet(
             "font-size: 10px; font-family: 'Courier New', monospace; font-weight: 700; "
             "color: rgba(255, 255, 255, 0.50); letter-spacing: 0.8px; margin-top: 4px;"
         )
-        self.content_layout.addWidget(lbl_sec3)
+        self.content_layout.addWidget(lbl_sec4)
 
         spotify_card = QFrame(self.scroll_content)
         spotify_card.setObjectName("spotifySettingsCard")
@@ -540,6 +742,9 @@ class SettingsTab(QWidget):
         sp_layout.addLayout(bottom_row)
         self.content_layout.addWidget(spotify_card)
 
+    # Backward compatibility alias
+    _build_section_3_spotify_settings = _build_section_4_spotify_settings
+
     def apply_preset(self, preset: dict):
         self.selected_preset_id = preset["id"]
         self.glass_opacity = round(float(preset["opacity"]), 2)
@@ -551,6 +756,10 @@ class SettingsTab(QWidget):
             self.notch_morph = preset["morph"]
         if "scrubber" in preset:
             self.scrubber_style = preset["scrubber"]
+        if "accent_mode" in preset:
+            self.accent_mode = preset["accent_mode"]
+        if "accent_color" in preset:
+            self.current_accent = preset["accent_color"]
 
         clear_pct = int(round((1.0 - self.glass_opacity) * 100))
         self.slider_clear.blockSignals(True)
@@ -577,6 +786,7 @@ class SettingsTab(QWidget):
 
         self._update_preset_button_styles()
         self._update_morph_button_styles()
+        self._update_swatch_styles()
         self._emit_personalization()
 
     def set_morphology(self, morph_mode: str):
@@ -623,6 +833,8 @@ class SettingsTab(QWidget):
             "tint_rgb": self.tint_rgb,
             "notch_morph": self.notch_morph,
             "scrubber_style": self.scrubber_style,
+            "accent_mode": self.accent_mode,
+            "accent_color": self.current_accent,
         }
         self.personalization_changed.emit(data)
 

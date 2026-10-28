@@ -123,6 +123,7 @@ class WaveformScrubber(QWidget):
         self._max_val = 1000
         self._current_val = 0
         self._block_signals = False
+        self.accent_color = "#34D399"
 
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -148,6 +149,7 @@ class WaveformScrubber(QWidget):
             self.seek_requested.emit(ratio)
 
     def set_accent_color(self, hex_color: str):
+        self.accent_color = hex_color
         self.canvas.set_accent_color(hex_color)
 
     def set_style_mode(self, mode: str):
