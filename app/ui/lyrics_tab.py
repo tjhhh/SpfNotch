@@ -210,11 +210,13 @@ class LyricsTab(QWidget):
             self._update_empty_track_display()
 
     def _update_empty_track_display(self):
-        if self.current_title:
+        if self.current_title and self.current_title != "-":
             html = (
-                f"<div style='text-align:center;'>"
+                f"<div style='text-align:center; padding: 20px 10px;'>"
                 f"<div style='font-size:16px; font-weight:800; color:#FFFFFF; margin-bottom:4px;'>{self.current_title}</div>"
-                f"<div style='font-size:12.5px; font-weight:500; color:rgba(255,255,255,0.60);'>{self.current_artist}</div>"
+                f"<div style='font-size:12.5px; font-weight:500; color:rgba(255,255,255,0.60); margin-bottom:12px;'>{self.current_artist}</div>"
+                f"<div style='font-size:11px; color:rgba(255,255,255,0.38); font-family: sans-serif;'>"
+                f"Lirik tidak tersedia untuk lagu ini</div>"
                 f"</div>"
             )
             self.empty_label.setText(html)

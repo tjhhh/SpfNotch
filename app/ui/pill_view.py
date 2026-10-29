@@ -84,8 +84,8 @@ class PillView(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.idle_mode = "lyrics"
-        self.current_title = "Ora Urus"
-        self.current_artist = "Toton Caribo, Wizz Baker"
+        self.current_title = "-"
+        self.current_artist = "-"
         self.current_cover = None
         self.is_playing = False
         self.current_lyric = ""
@@ -124,7 +124,7 @@ class PillView(QWidget):
         )
         self.line1_row.addWidget(self.live_badge)
 
-        self.line1_label = QLabel("Ora Urus")
+        self.line1_label = QLabel("-")
         self.line1_label.setStyleSheet("color: #FFFFFF; font-size: 11.5px; font-weight: 700;")
         self.line1_row.addWidget(self.line1_label, 1)
 
@@ -169,8 +169,8 @@ class PillView(QWidget):
             self.current_lyric = ""
             self.upcoming_lyric = ""
 
-        self.current_title = title if title else "Spotify"
-        self.current_artist = artist if artist else ""
+        self.current_title = title if title else "-"
+        self.current_artist = artist if artist else "-"
         self.current_cover = cover_pixmap
         self.is_playing = is_playing
 
@@ -231,12 +231,19 @@ class PillView(QWidget):
                 self.line2_label.setVisible(False)
         else:
             self.live_badge.setVisible(False)
-            prefix = "♪ " if self.is_playing else "⏸ "
-            self.line1_label.setText(self._truncate(f"{prefix}{self.current_title}", 52))
+            if self.current_title == "-" or not self.current_title:
+                self.line1_label.setText("-")
+            else:
+                prefix = "♪ " if self.is_playing else "⏸ "
+                self.line1_label.setText(self._truncate(f"{prefix}{self.current_title}", 52))
 
-            if self.current_artist:
+            if self.current_artist and self.current_artist != "-":
                 self.line2_label.setStyleSheet("color: rgba(255, 255, 255, 0.65); font-size: 10.5px; font-style: normal;")
                 self.line2_label.setText(self._truncate(self.current_artist, 56))
+                self.line2_label.setVisible(True)
+            elif self.current_artist == "-":
+                self.line2_label.setStyleSheet("color: rgba(255, 255, 255, 0.65); font-size: 10.5px; font-style: normal;")
+                self.line2_label.setText("-")
                 self.line2_label.setVisible(True)
             else:
                 self.line2_label.setVisible(False)

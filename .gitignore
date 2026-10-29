@@ -31,3 +31,7 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# ---- Agent & Test temp artifacts ----
+.agents/
+TEST_*.md

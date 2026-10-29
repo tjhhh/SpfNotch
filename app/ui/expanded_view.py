@@ -46,27 +46,40 @@ class ExpandedCoverArt(QWidget):
             painter.drawPixmap(0, 0, scaled)
             painter.setClipping(False)
         else:
-            from PyQt6.QtGui import QLinearGradient, QFont
-            grad = QLinearGradient(0, 0, s, s)
-            grad.setColorAt(0.0, QColor("#EF4444"))
-            grad.setColorAt(0.5, QColor("#EAB308"))
-            grad.setColorAt(1.0, QColor("#10B981"))
+            from PyQt6.QtGui import QRadialGradient, QFont
+            # Elegant dark vinyl squircle with subtle radial depth
+            bg_grad = QRadialGradient(s * 0.5, s * 0.5, s * 0.7)
+            bg_grad.setColorAt(0.0, QColor("#222736"))
+            bg_grad.setColorAt(0.7, QColor("#141721"))
+            bg_grad.setColorAt(1.0, QColor("#0C0E14"))
+
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, s, s), r, r)
+            painter.setClipPath(path)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(grad))
+            painter.setBrush(QBrush(bg_grad))
             painter.drawRoundedRect(QRectF(0, 0, s, s), r, r)
 
-            painter.setBrush(QBrush(QColor(0, 0, 0, 125)))
-            painter.drawRoundedRect(QRectF(5, 17, s - 10, 18), 4.5, 4.5)
-            painter.setPen(QColor("#FFFFFF"))
-            f = QFont("Courier New", 8)
+            # Subtle concentric vinyl record groove rings
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(255, 255, 255, 14), 1.0))
+            for rad in [s * 0.38, s * 0.28, s * 0.18]:
+                painter.drawEllipse(QRectF(s * 0.5 - rad, s * 0.5 - rad, rad * 2, rad * 2))
+
+            # Centered musical note ♫ in glowing accent color
+            painter.setPen(self.accent_color)
+            f = QFont("Segoe UI Symbol", int(s * 0.36))
             f.setBold(True)
             painter.setFont(f)
-            painter.drawText(QRectF(5, 17, s - 10, 18), Qt.AlignmentFlag.AlignCenter, "EAST V")
+            painter.drawText(QRectF(0, 0, s, s), Qt.AlignmentFlag.AlignCenter, "♫")
+            painter.setClipping(False)
 
         painter.setPen(QPen(QColor(255, 255, 255, 55), 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(QRectF(0.5, 0.5, s - 1, s - 1), r, r)
         painter.end()
+
+AlbumCoverWidget = ExpandedCoverArt
 
 
 class NavPillButton(QFrame):
@@ -226,6 +239,8 @@ class QuickGlassButton(QPushButton):
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, getattr(self, "_display_text", "58% Clear"))
         painter.end()
 
+AlbumCoverWidget = ExpandedCoverArt
+
 
 class ExpandedView(QWidget):
     """
@@ -270,10 +285,10 @@ class ExpandedView(QWidget):
         meta_col.setContentsMargins(0, 1, 0, 1)
         meta_col.setSpacing(2)
 
-        self.title_lbl = QLabel("Ora Urus")
+        self.title_lbl = QLabel("-")
         self.title_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.3px;")
         
-        self.artist_lbl = QLabel("Toton Caribo, Wizz Baker, Justy Aldrin, Jacso...")
+        self.artist_lbl = QLabel("-")
         self.artist_lbl.setStyleSheet("font-size: 12px; color: rgba(255, 255, 255, 0.65);")
 
         self.quality_lbl = QLabel("24-BIT / 96KHZ FLAC")
@@ -429,6 +444,8 @@ class ExpandedView(QWidget):
         self.tabs.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.set_active(i == index, self.accent_color)
+        if index == 1 and hasattr(self, "queue_tab"):
+            self.queue_tab.refresh_requested.emit()
 
     def _on_queue_count_changed(self, count: int):
         if hasattr(self, "queue_badge_lbl"):
@@ -466,9 +483,23 @@ class ExpandedView(QWidget):
         self.search_tab.set_accent_color(hex_color)
         self.switch_tab(self.tabs.currentIndex())
 
+    def apply_initial_config(self, config: dict):
+        if hasattr(self, "settings_tab"):
+            self.settings_tab.load_personalization_config(config)
+        p_cfg = config.get("personalization", {})
+        scrubber_style = p_cfg.get("scrubber_style", "waveform")
+        self.waveform_scrubber.set_style_mode(scrubber_style)
+        
+        opacity = float(p_cfg.get("opacity", 0.94))
+        clear_pct = int(round((1.0 - opacity) * 100))
+        self.btn_quick_glass.setText(f"● {clear_pct}% Clear")
+        
+        accent_color = p_cfg.get("accent_color", "#34D399")
+        self.set_accent_color(accent_color)
+
     def update_track(self, title: str, artist: str, cover_pixmap: QPixmap | None, is_playing: bool):
-        self.title_lbl.setText(title if title else "Tidak ada lagu")
-        self.artist_lbl.setText(artist if artist else "Spotify")
+        self.title_lbl.setText(title if title else "-")
+        self.artist_lbl.setText(artist if artist else "-")
         self.cover_widget.set_pixmap(cover_pixmap)
         self.btn_play.set_playing(is_playing)
         self.lyrics_tab.set_track_metadata(title, artist)

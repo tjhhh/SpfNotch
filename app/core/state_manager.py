@@ -59,6 +59,8 @@ class StateManager(QObject):
         self.demo_mode: bool = False
         self._play_lock_until: float = 0.0
         self._pending_track_uri: str = ""
+        self._last_reconnect_attempt: float = 0.0
+        self._is_shutting_down: bool = False
 
         # Polling Timer (Checks Spotify every 1.5s while playing, 800ms while paused for instant resume)
         self.poll_timer = QTimer(self)
@@ -78,12 +80,24 @@ class StateManager(QObject):
         self.thread_pool.start(worker)
 
     def _bg_fetch_playback(self):
+        if getattr(self, "_is_shutting_down", False):
+            return
+
         if getattr(self.spotify, "is_authenticating", False):
             return
 
         if not self.spotify.is_connected:
-            self._playback_received.emit(None)
-            return
+            # Try background auto-reconnect if credentials exist
+            if self.spotify.client_id and self.spotify.client_secret:
+                now = time.time()
+                if now - self._last_reconnect_attempt > 4.0:
+                    self._last_reconnect_attempt = now
+                    if self.spotify.try_auto_reconnect():
+                        self.connection_changed.emit(True)
+
+            if not self.spotify.is_connected:
+                self._playback_received.emit(None)
+                return
 
         try:
             playback = self.spotify.get_current_playback()
@@ -93,9 +107,12 @@ class StateManager(QObject):
 
     def _on_playback_received(self, playback: dict | None):
         """Executes safely on the MAIN GUI THREAD via Qt QueuedConnection"""
+        if getattr(self, "_is_shutting_down", False):
+            return
+
         if not self.spotify.is_connected:
-            if not self.current_track:
-                self._load_demo_track()
+            if not self.current_track or self.current_track.get("title") != "-":
+                self._load_disconnected_state()
             return
 
         self.demo_mode = False
@@ -111,6 +128,21 @@ class StateManager(QObject):
                 if self.current_track:
                     self.current_track["is_playing"] = False
                     self.playback_state_changed.emit(self.current_track)
+            elif not self.current_track or self.current_track.get("title") == "-":
+                # Spotify is connected, but idle with no active playback
+                standby_track = {
+                    "is_playing": False,
+                    "track_id": "",
+                    "title": "-",
+                    "artist": "-",
+                    "album": "Spotify Standby",
+                    "cover_url": "",
+                    "progress_ms": 0,
+                    "duration_ms": 0,
+                    "uri": ""
+                }
+                self.current_track = standby_track
+                self.playback_state_changed.emit(standby_track)
             self.connection_changed.emit(True)
             return
 
@@ -172,56 +204,44 @@ class StateManager(QObject):
             self.active_lyric_changed.emit(-1, "", "")
             self._fetch_lyrics_and_queue(playback)
 
-    def _load_demo_track(self):
-        """Mock demo data matching Figma Redesign so user can see the exact UI immediately"""
-        self.demo_mode = True
-        demo_track = {
-            "is_playing": True,
-            "track_id": "ora-urus",
-            "title": "Ora Urus",
-            "artist": "Toton Caribo, Wizz Baker, Justy Aldrin, Jacson Zeran",
-            "album": "East Bounce Session",
+    def _load_disconnected_state(self):
+        """Clean disconnected state showing '-' when not connected to Spotify"""
+        self.demo_mode = False
+        disc_track = {
+            "is_playing": False,
+            "track_id": "",
+            "title": "-",
+            "artist": "-",
+            "album": "-",
             "cover_url": "",
-            "progress_ms": 154000,
-            "duration_ms": 278000,
-            "uri": "spotify:track:ora_urus"
+            "progress_ms": 0,
+            "duration_ms": 0,
+            "uri": ""
         }
-        self.current_track = demo_track
-        self.current_progress_ms = 154000
-        self.duration_ms = 278000
-        self.is_playing = True
-        self.last_tick_timestamp = time.time()
-        self.tick_timer.start(self.tick_interval_ms)
+        self.current_track = disc_track
+        self.current_progress_ms = 0
+        self.duration_ms = 0
+        self.is_playing = False
+        if self.tick_timer.isActive():
+            self.tick_timer.stop()
         self.connection_changed.emit(False)
-        self.playback_state_changed.emit(demo_track)
+        self.playback_state_changed.emit(disc_track)
+        self.current_lyrics = None
+        self.active_lyric_idx = -1
+        self.lyrics_loaded.emit({"synced": False, "lines": [], "timestamps": [], "raw": ""})
+        self.active_lyric_changed.emit(-1, "", "")
+        self.queue_updated.emit([])
 
-        # Mock demo lyrics from Figma Redesign
-        demo_lyrics = {
-            "synced": True,
-            "lines": [
-                {"time_ms": 138000, "text": "Sio ado, ko bikin pusing kepala tiap malam", "subtext": "Verse 2 • Toton Caribo"},
-                {"time_ms": 144000, "text": "Janji manis tinggal cerita di ujung jalan", "subtext": "Pre-Chorus"},
-                {"time_ms": 149000, "text": "Kalau begitu, sekarang hidup ni ko yang urus", "subtext": "Hidup ni ko yang urus, sa cape, ora urus"},
-                {"time_ms": 154000, "text": "Hidup ni ko yang urus, sa cape, ora urus", "subtext": "Hook Utama • Beat Drop"},
-                {"time_ms": 159000, "text": "Ba-ba-baby, oh, ba-ba-ba-ba-ba-baby", "subtext": "Chant Part I"},
-                {"time_ms": 164000, "text": "Oh, ba-ba-baby, oh, ba-ba-ba-ba-ba-baby", "subtext": "Chant Part II"},
-                {"time_ms": 169000, "text": "Ba-ba-baby, oh, ba-ba-ba-ba-ba-baby", "subtext": "Chorus Peak"},
-                {"time_ms": 175000, "text": "Sa sudah malas tahu, terserah ko mau kemana", "subtext": "Outro Groove"},
-                {"time_ms": 182000, "text": "Biar waktu yang bicara, sa jalan lurus saja", "subtext": "Fade Out"}
-            ],
-            "timestamps": [138000, 144000, 149000, 154000, 159000, 164000, 169000, 175000, 182000],
-            "raw": ""
-        }
-        self.current_lyrics = demo_lyrics
-        self.lyrics_loaded.emit(demo_lyrics)
+    def _load_demo_track(self):
+        """Fallback pointing to disconnected state with '-' placeholder"""
+        self._load_disconnected_state()
 
-        # Initial queue in demo mode
-        demo_queue = [
-            {"id": "ini-abadi", "title": "Ini Abadi", "artist": "Perunggu", "duration_ms": 242000, "cover_url": "", "uri": "spotify:track:ini_abadi"},
-            {"id": "abadi-dendi", "title": "Abadi - Indo Version", "artist": "Dendi Nata", "duration_ms": 255000, "cover_url": "", "uri": "spotify:track:abadi_dendi"},
-            {"id": "bunga-abadi", "title": "Bunga Abadi", "artist": "Rio Clappy", "duration_ms": 236000, "cover_url": "", "uri": "spotify:track:bunga_abadi"}
-        ]
-        self.queue_updated.emit(demo_queue)
+    def shutdown(self):
+        self._is_shutting_down = True
+        if hasattr(self, "poll_timer"):
+            self.poll_timer.stop()
+        if hasattr(self, "tick_timer"):
+            self.tick_timer.stop()
 
     def _interpolate_tick(self):
         """Interpolates playback progress between API polls for 60fps smooth progress"""
@@ -259,12 +279,11 @@ class StateManager(QObject):
             next_text = lines[idx + 1]["text"] if 0 <= idx + 1 < len(lines) else ""
             self.active_lyric_changed.emit(idx, text, next_text)
 
-    def _fetch_lyrics_and_queue(self, track_info: dict):
+    def _fetch_lyrics_worker(self, track_info: dict):
         self.active_lyric_idx = -1
         req_track_id = track_info.get("track_id", "")
         
         def bg_work():
-            # 1. Fetch Lyrics in worker thread
             lyrics_data = self.lyrics.fetch_lyrics(
                 track_name=track_info.get("title", ""),
                 artist_name=track_info.get("artist", ""),
@@ -276,11 +295,11 @@ class StateManager(QObject):
                 lyrics_data["_track_id"] = req_track_id
                 self._lyrics_received.emit(lyrics_data)
 
-            # 2. Fetch Queue in worker thread
-            queue_items = self.spotify.get_queue()
-            self._queue_received.emit(queue_items)
-
         self.thread_pool.start(WorkerTask(bg_work))
+
+    def _fetch_lyrics_and_queue(self, track_info: dict):
+        self._fetch_lyrics_worker(track_info)
+        self.fetch_queue()
 
     def _on_lyrics_received(self, lyrics_data: dict):
         """Runs safely on the MAIN GUI THREAD"""

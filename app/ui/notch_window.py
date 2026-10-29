@@ -85,10 +85,10 @@ class NotchWindow(QWidget):
         self.expanded_view.queue_tab.set_image_cache(self.img_cache)
         self.expanded_view.search_tab.set_image_cache(self.img_cache)
 
-        # Initialize accent color across views
+        # Initialize and apply configuration across views
+        self.expanded_view.apply_initial_config(config)
         self.pill_view.set_accent_color(self.accent_color)
-        self.expanded_view.set_accent_color(self.accent_color)
-        self.expanded_view.settings_tab.set_initial_accent(self.accent_mode, self.accent_color)
+        self.expanded_view.settings_tab.set_connected(self.state_mgr.spotify.is_connected)
 
         self.main_layout.addWidget(self.pill_view)
         self.main_layout.addWidget(self.expanded_view)
@@ -227,7 +227,7 @@ class NotchWindow(QWidget):
         self.state_mgr.connection_changed.connect(self.expanded_view.settings_tab.set_connected)
 
         # Settings & Personalization
-        self.expanded_view.settings_tab.idle_mode_changed.connect(self.pill_view.set_idle_mode)
+        self.expanded_view.settings_tab.idle_mode_changed.connect(self._on_idle_mode_changed)
         self.expanded_view.settings_tab.personalization_changed.connect(self._on_personalization_changed)
 
         # Input focus activation
@@ -243,7 +243,7 @@ class NotchWindow(QWidget):
         self.expanded_view.prev_clicked.connect(self.state_mgr.previous_track)
         self.expanded_view.seek_clicked.connect(self.state_mgr.seek)
         self.expanded_view.collapse_clicked.connect(self.collapse)
-        self.expanded_view.exit_clicked.connect(QApplication.quit)
+        self.expanded_view.exit_clicked.connect(self._on_exit_requested)
 
         # Queue tab actions
         self.expanded_view.queue_tab.refresh_requested.connect(self.state_mgr.fetch_queue)
@@ -322,6 +322,50 @@ class NotchWindow(QWidget):
                 json.dump(cfg_data, f, indent=2)
         except Exception as e:
             print(f"[NotchWindow] Error saving personalization: {e}")
+
+    def _on_idle_mode_changed(self, mode: str):
+        self.pill_view.set_idle_mode(mode)
+        self._save_idle_mode_to_config(mode)
+
+    def _save_idle_mode_to_config(self, mode: str):
+        try:
+            cfg_path = getattr(self.state_mgr.spotify, "config_path", None)
+            if not cfg_path or not os.path.exists(cfg_path):
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                cfg_path = os.path.join(base_dir, "config.json")
+
+            if os.path.exists(cfg_path):
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg_data = json.load(f)
+            else:
+                cfg_data = {}
+
+            if "ui" not in cfg_data:
+                cfg_data["ui"] = {}
+
+            cfg_data["ui"]["idle_mode"] = mode
+
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg_data, f, indent=2)
+        except Exception as e:
+            print(f"[NotchWindow] Error saving idle mode: {e}")
+
+    def save_all_settings(self):
+        """Ensures all current settings are flushed to disk."""
+        self._save_personalization_to_config()
+        if hasattr(self, "expanded_view") and hasattr(self.expanded_view, "settings_tab"):
+            current_idle = self.expanded_view.settings_tab.combo_idle.currentData() or "lyrics"
+            self._save_idle_mode_to_config(current_idle)
+
+    def _on_exit_requested(self):
+        self.save_all_settings()
+        if hasattr(self, "state_mgr"):
+            self.state_mgr.shutdown()
+        QApplication.quit()
+
+    def closeEvent(self, event):
+        self.save_all_settings()
+        super().closeEvent(event)
 
     def _on_play_track(self, uri: str, track_meta: dict | None = None):
         self.state_mgr.play_track(uri, track_meta)

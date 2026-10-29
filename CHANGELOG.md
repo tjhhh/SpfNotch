@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/).
 
+## [1.2.0] - 2026-10-29
+
+### Added
+- **Settings Persistence**: Full restoration of personalization presets, glass opacity/blur, accent colors, timeline styles, and idle mode across app restarts.
+- **Real Album Art & Disk Cache**: Replaced "EAST V" placeholder with dynamic vinyl squircle; added persistent disk cache (`.cache/covers/`) using thread-safe downloads.
+- **Multi-Stage Lyrics Engine**: Implemented 5-stage querying across LRCLIB, Lyrics.ovh, and NetEase with 55s duration tolerance and instant local caching (`.cache/lyrics/`).
+- **Resilient Queue Sync**: Decoupled queue fetching from lyrics into independent background workers, added auto-refresh on switching to the "Antrean" tab, and added a manual refresh button.
+- **Comprehensive Test Suites**: Added automated suites for queue edge cases (`tests/test_queue_parsing_and_concurrency.py`), adversarial payloads, and UI concurrency.
+
+### Fixed
+- **Queue NoneType Crash**: Resolved `AttributeError` when Spotify queue contains music videos, podcasts, or local tracks with `album: None`.
+- **Auto-Connect & Standby**: Eliminated dead-end auth loops, gracefully handling Spotify token refreshes, and replacing demo tracks ("Ora Urus") with clean `-`.
+
 ## [1.1.1] - 2026-10-28
 
 ### Fixed

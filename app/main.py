@@ -163,6 +163,10 @@ def main():
     # Start state synchronization
     state_manager.start()
 
+    # Ensure all settings are flushed on application exit
+    app.aboutToQuit.connect(notch_window.save_all_settings)
+    app.aboutToQuit.connect(state_manager.shutdown)
+
     if test_mode:
         print("[spfnotch] --test flag detected. Running 1.2s smoke test...")
         QTimer.singleShot(1200, lambda: (print("[spfnotch] Smoke test successful!"), app.quit()))

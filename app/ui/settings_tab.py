@@ -229,7 +229,7 @@ class SettingsTab(QWidget):
         {"id": "silver", "name": "Ice Silver", "hex": "#E2E8F0"},
     ]
 
-    def __init__(self, current_client_id: str = "", current_client_secret: str = "", parent=None):
+    def __init__(self, current_client_id: str = "", current_client_secret: str = "", config: dict | None = None, parent=None):
         super().__init__(parent)
         self.selected_preset_id = "default-black"
         self.glass_opacity = 0.94
@@ -281,6 +281,77 @@ class SettingsTab(QWidget):
 
         self.scroll_area.setWidget(self.scroll_content)
         self.layout.addWidget(self.scroll_area, 1)
+
+        if config:
+            self.load_personalization_config(config)
+        else:
+            self._update_preset_button_styles()
+            self._update_morph_button_styles()
+            self._update_swatch_styles()
+
+    def load_personalization_config(self, config: dict):
+        p_cfg = config.get("personalization", {})
+        ui_cfg = config.get("ui", {})
+
+        self.selected_preset_id = p_cfg.get("preset", "default-black")
+        self.glass_opacity = float(p_cfg.get("opacity", 0.94))
+        self.glass_blur = int(p_cfg.get("blur", 28))
+        self.specular_rim = float(p_cfg.get("specular_border", 0.18))
+        self.chroma_glow = float(p_cfg.get("chroma_glow", 0.25))
+        self.tint_rgb = p_cfg.get("tint_rgb", "9, 10, 15")
+        self.notch_morph = p_cfg.get("notch_morph", "hardware-flush")
+        self.scrubber_style = p_cfg.get("scrubber_style", "waveform")
+        self.accent_mode = p_cfg.get("accent_mode", "preset")
+        self.current_accent = p_cfg.get("accent_color", "#34D399")
+
+        clear_pct = int(round((1.0 - self.glass_opacity) * 100))
+        self.slider_clear.blockSignals(True)
+        self.slider_clear.setValue(clear_pct)
+        self.slider_clear.blockSignals(False)
+        self.lbl_clear_val.setText(f"{clear_pct}%")
+
+        self.slider_blur.blockSignals(True)
+        self.slider_blur.setValue(int(self.glass_blur))
+        self.slider_blur.blockSignals(False)
+        self.lbl_blur_val.setText(f"{int(self.glass_blur)}px")
+
+        chroma_pct = int(round(self.chroma_glow * 100))
+        self.slider_chroma.blockSignals(True)
+        self.slider_chroma.setValue(chroma_pct)
+        self.slider_chroma.blockSignals(False)
+        self.lbl_chroma_val.setText(f"{chroma_pct}%")
+
+        specular_pct = int(round(self.specular_rim * 100))
+        self.slider_specular.blockSignals(True)
+        self.slider_specular.setValue(specular_pct)
+        self.slider_specular.blockSignals(False)
+        self.lbl_specular_val.setText(f"{specular_pct}%")
+
+        if self.scrubber_style == "laser-line":
+            self.btn_timeline_toggle.setText("Timeline: Laser")
+        else:
+            self.btn_timeline_toggle.setText("Timeline: Waveform")
+
+        idle_mode = ui_cfg.get("idle_mode", "lyrics")
+        idx = 1 if idle_mode == "track" else 0
+        self.combo_idle.blockSignals(True)
+        self.combo_idle.setCurrentIndex(idx)
+        self.combo_idle.blockSignals(False)
+
+        if self.accent_mode == "auto":
+            self.lbl_accent_tag.setText("AUTO (SAMPUL)")
+            self.lbl_accent_tag.setStyleSheet(
+                "font-size: 9px; font-family: 'Courier New', monospace; font-weight: 700; "
+                "color: #38BDF8; background: rgba(56, 189, 248, 0.14); "
+                "padding: 2px 7px; border-radius: 5px; border: none;"
+            )
+        else:
+            self.lbl_accent_tag.setText(self.current_accent)
+            self.lbl_accent_tag.setStyleSheet(
+                f"font-size: 9.5px; font-family: 'Courier New', monospace; font-weight: 700; "
+                f"color: {self.current_accent}; background: {self.current_accent}22; "
+                "padding: 2px 7px; border-radius: 5px; border: none;"
+            )
 
         self._update_preset_button_styles()
         self._update_morph_button_styles()
@@ -891,7 +962,7 @@ class SettingsTab(QWidget):
             self.status_banner.setText("● Terhubung ke Spotify API")
             self.status_banner.setStyleSheet("color: #34D399; font-weight: bold; font-size: 11px;")
         else:
-            self.status_banner.setText("● Belum Terhubung (Mode Demo)")
+            self.status_banner.setText("● Belum Terhubung ke Spotify API")
             self.status_banner.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 11px;")
 
     def set_credentials(self, client_id: str, client_secret: str):

@@ -198,10 +198,42 @@ class QueueTab(QWidget):
         self.layout.setContentsMargins(2, 4, 2, 4)
         self.layout.setSpacing(6)
 
-        # Invisible refresh trigger button for compatibility
-        self.btn_refresh = QPushButton(self)
-        self.btn_refresh.setVisible(False)
+        # Header bar with title and refresh button
+        self.header_widget = QWidget(self)
+        header_layout = QHBoxLayout(self.header_widget)
+        header_layout.setContentsMargins(4, 2, 4, 2)
+        header_layout.setSpacing(8)
+
+        self.header_label = QLabel("ANTREAN SPOTIFY", self.header_widget)
+        self.header_label.setStyleSheet("color: rgba(255, 255, 255, 0.5); font-size: 11px; font-weight: 600; letter-spacing: 0.5px;")
+        header_layout.addWidget(self.header_label)
+        header_layout.addStretch()
+
+        self.btn_refresh = QPushButton("↻ Segarkan", self.header_widget)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.08);
+                color: rgba(255, 255, 255, 0.85);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 12px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.16);
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.25);
+            }
+            QPushButton:pressed {
+                background: rgba(255, 255, 255, 0.22);
+            }
+        """)
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
+        header_layout.addWidget(self.btn_refresh)
+
+        self.layout.addWidget(self.header_widget)
 
         # List Widget
         self.list_widget = QListWidget()

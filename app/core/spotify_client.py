@@ -6,7 +6,7 @@ import http.server
 import urllib.parse
 import threading
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
+from spotipy.oauth2 import SpotifyOAuth, SpotifyOauthError
 from spotipy.exceptions import SpotifyException
 
 class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -138,11 +138,33 @@ class SpotifyClient:
                 self.is_connected = False
                 self.sp = None
                 return False
+        except SpotifyOauthError as oe:
+            print(f"[SpotifyClient] OAuth error (clearing invalid cache): {oe}")
+            cache_dir = os.path.dirname(self.config_path)
+            cache_path = os.path.join(cache_dir, ".spotify_token_cache")
+            if os.path.exists(cache_path):
+                try:
+                    os.remove(cache_path)
+                except Exception:
+                    pass
+            self.is_connected = False
+            self.sp = None
+            return False
         except Exception as e:
             print(f"[SpotifyClient] Init error: {e}")
             self.is_connected = False
             self.sp = None
             return False
+
+    def try_auto_reconnect(self) -> bool:
+        """Attempts to reconnect using cached credentials/tokens in a safe, non-blocking way."""
+        if not self.client_id or not self.client_secret:
+            return False
+        if self.is_authenticating:
+            return False
+        if self.is_connected and self.sp:
+            return True
+        return self.init_spotify()
 
     def start_single_shot_auth(self, on_done_callback):
         """Runs a safe, controlled single-shot OAuth in a background thread."""
@@ -204,6 +226,27 @@ class SpotifyClient:
         try:
             playback = self.sp.current_playback()
             if not playback:
+                try:
+                    recent = self.sp.current_user_recently_played(limit=1)
+                    if recent and recent.get("items"):
+                        item = recent["items"][0].get("track")
+                        if item:
+                            artists = ", ".join([a["name"] for a in item.get("artists", [])])
+                            images = item.get("album", {}).get("images", [])
+                            cover_url = images[0]["url"] if images else ""
+                            return {
+                                "is_playing": False,
+                                "track_id": item.get("id", ""),
+                                "title": item.get("name", "-"),
+                                "artist": artists or "-",
+                                "album": item.get("album", {}).get("name", ""),
+                                "cover_url": cover_url,
+                                "progress_ms": 0,
+                                "duration_ms": item.get("duration_ms", 0),
+                                "uri": item.get("uri", "")
+                            }
+                except Exception:
+                    pass
                 return None
 
             dev = playback.get("device")
@@ -334,7 +377,7 @@ class SpotifyClient:
             return False
 
     def get_queue(self) -> list[dict]:
-        if not self.sp:
+        if not self._ensure_connected():
             return [
                 {"id": "ini-abadi", "title": "Ini Abadi", "artist": "Perunggu", "duration_ms": 242000, "cover_url": "", "uri": "spotify:track:ini_abadi"},
                 {"id": "abadi-dendi", "title": "Abadi - Indo Version", "artist": "Dendi Nata", "duration_ms": 255000, "cover_url": "", "uri": "spotify:track:abadi_dendi"},
@@ -342,28 +385,86 @@ class SpotifyClient:
             ]
         try:
             res = self.sp.queue()
-            if not res or not res.get("queue"):
+            if not res or not isinstance(res, dict) or not res.get("queue") or not isinstance(res.get("queue"), list):
                 return []
             
             queue_tracks = []
-            for item in res["queue"][:15]:
-                artists = ", ".join([a["name"] for a in item.get("artists", [])])
-                images = item.get("album", {}).get("images", [])
-                cover_url = images[-1]["url"] if images else ""
-                t_uri = item.get("uri", "")
-                a_uri = item.get("album", {}).get("uri", "")
-                if t_uri and a_uri:
-                    self._track_album_map[t_uri] = a_uri
-                queue_tracks.append({
-                    "id": item.get("id", ""),
-                    "title": item.get("name", "Unknown"),
-                    "artist": artists,
-                    "album": item.get("album", {}).get("name", ""),
-                    "album_uri": a_uri,
-                    "duration_ms": item.get("duration_ms", 0),
-                    "cover_url": cover_url,
-                    "uri": t_uri
-                })
+            raw_queue = res.get("queue", [])
+            for item in raw_queue:
+                try:
+                    if not isinstance(item, dict):
+                        continue
+
+                    raw_album = item.get("album")
+                    album = raw_album if isinstance(raw_album, dict) else {}
+                    album_name = str(album.get("name")) if isinstance(album.get("name"), str) else ""
+                    a_uri = str(album.get("uri")) if isinstance(album.get("uri"), str) else ""
+
+                    raw_show = item.get("show")
+                    show = raw_show if isinstance(raw_show, dict) else {}
+
+                    artists = ""
+                    raw_artists = item.get("artists")
+                    if isinstance(raw_artists, list) and raw_artists:
+                        names = [str(a["name"]) for a in raw_artists if isinstance(a, dict) and a.get("name") is not None]
+                        artists = ", ".join(names)
+
+                    if not artists:
+                        if show.get("publisher"):
+                            artists = str(show.get("publisher"))
+                        elif show.get("name"):
+                            artists = str(show.get("name"))
+
+                    images = []
+                    if isinstance(album.get("images"), list) and album["images"]:
+                        images = album["images"]
+                    elif isinstance(item.get("images"), list) and item["images"]:
+                        images = item["images"]
+                    elif isinstance(show.get("images"), list) and show["images"]:
+                        images = show["images"]
+
+                    cover_url = ""
+                    if images:
+                        for img in reversed(images):
+                            if isinstance(img, dict) and isinstance(img.get("url"), str) and img["url"]:
+                                cover_url = img["url"]
+                                break
+                        if not cover_url:
+                            for img in images:
+                                if isinstance(img, dict) and isinstance(img.get("url"), str) and img["url"]:
+                                    cover_url = img["url"]
+                                    break
+
+                    raw_uri = item.get("uri")
+                    t_uri = str(raw_uri) if isinstance(raw_uri, str) else ""
+                    if t_uri and a_uri:
+                        self._track_album_map[t_uri] = a_uri
+
+                    raw_dur = item.get("duration_ms")
+                    duration_ms = raw_dur if (isinstance(raw_dur, int) and not isinstance(raw_dur, bool)) else 0
+
+                    raw_id = item.get("id")
+                    track_id = str(raw_id) if raw_id is not None else ""
+
+                    raw_name = item.get("name")
+                    title = str(raw_name) if raw_name is not None else "Unknown"
+
+                    queue_tracks.append({
+                        "id": track_id,
+                        "title": title,
+                        "artist": artists,
+                        "album": album_name,
+                        "album_uri": a_uri,
+                        "duration_ms": duration_ms,
+                        "cover_url": cover_url,
+                        "uri": t_uri
+                    })
+                    if len(queue_tracks) >= 30:
+                        break
+                except Exception as item_err:
+                    print(f"[SpotifyClient] get_queue item error: {item_err}")
+                    continue
+
             return queue_tracks
         except Exception as e:
             print(f"[SpotifyClient] get_queue error: {e}")

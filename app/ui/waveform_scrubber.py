@@ -152,6 +152,10 @@ class WaveformScrubber(QWidget):
         self.accent_color = hex_color
         self.canvas.set_accent_color(hex_color)
 
+    @property
+    def style_mode(self) -> str:
+        return self.canvas.style_mode
+
     def set_style_mode(self, mode: str):
         self.canvas.set_style_mode(mode)
 
