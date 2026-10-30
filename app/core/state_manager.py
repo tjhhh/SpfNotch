@@ -13,6 +13,9 @@ class WorkerTask(QRunnable):
     def run(self):
         try:
             self.fn(*self.args, **self.kwargs)
+        except RuntimeError as re:
+            if "wrapped C/C++ object" not in str(re):
+                print(f"[WorkerTask] RuntimeError: {re}")
         except Exception as e:
             print(f"[WorkerTask] Error: {e}")
 
@@ -61,8 +64,10 @@ class StateManager(QObject):
         self._pending_track_uri: str = ""
         self._last_reconnect_attempt: float = 0.0
         self._is_shutting_down: bool = False
+        self._is_polling: bool = False
+        self._pause_start_timestamp: float = 0.0
 
-        # Polling Timer (Checks Spotify every 1.5s while playing, 800ms while paused for instant resume)
+        # Polling Timer (Checks Spotify adaptively: 1.5s playing, 1.0s quick pause, 3.0s-5.0s idle)
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll_spotify)
         self.poll_timer.start(1500)
@@ -76,34 +81,53 @@ class StateManager(QObject):
         self._poll_spotify()
 
     def _poll_spotify(self):
+        if getattr(self, "_is_shutting_down", False):
+            return
+        if getattr(self, "_is_polling", False):
+            return
+        self._is_polling = True
         worker = WorkerTask(self._bg_fetch_playback)
         self.thread_pool.start(worker)
 
     def _bg_fetch_playback(self):
-        if getattr(self, "_is_shutting_down", False):
-            return
-
-        if getattr(self.spotify, "is_authenticating", False):
-            return
-
-        if not self.spotify.is_connected:
-            # Try background auto-reconnect if credentials exist
-            if self.spotify.client_id and self.spotify.client_secret:
-                now = time.time()
-                if now - self._last_reconnect_attempt > 4.0:
-                    self._last_reconnect_attempt = now
-                    if self.spotify.try_auto_reconnect():
-                        self.connection_changed.emit(True)
-
-            if not self.spotify.is_connected:
-                self._playback_received.emit(None)
+        try:
+            if getattr(self, "_is_shutting_down", False):
                 return
 
-        try:
+            if getattr(self.spotify, "is_authenticating", False):
+                return
+
+            if not self.spotify.is_connected:
+                # Try background auto-reconnect if credentials exist
+                if self.spotify.client_id and self.spotify.client_secret:
+                    now = time.time()
+                    if now - self._last_reconnect_attempt > 4.0:
+                        self._last_reconnect_attempt = now
+                        if self.spotify.try_auto_reconnect():
+                            self.connection_changed.emit(True)
+
+                if not self.spotify.is_connected:
+                    self._playback_received.emit(None)
+                    return
+
             playback = self.spotify.get_current_playback()
+            if playback is None and hasattr(self.spotify, "get_local_desktop_playback"):
+                playback = self.spotify.get_local_desktop_playback()
             self._playback_received.emit(playback)
         except Exception as e:
             print(f"[StateManager] bg_fetch_playback error: {e}")
+        finally:
+            self._is_polling = False
+
+    def force_reconnect(self) -> bool:
+        """Forces an immediate token refresh and connection synchronization."""
+        self._last_reconnect_attempt = 0.0
+        self.spotify._rate_limit_until = 0.0
+        success = self.spotify.try_auto_reconnect(force_refresh=True)
+        self.connection_changed.emit(success)
+        self._is_polling = False
+        self._poll_spotify()
+        return success
 
     def _on_playback_received(self, playback: dict | None):
         """Executes safely on the MAIN GUI THREAD via Qt QueuedConnection"""
@@ -113,6 +137,8 @@ class StateManager(QObject):
         if not self.spotify.is_connected:
             if not self.current_track or self.current_track.get("title") != "-":
                 self._load_disconnected_state()
+            if self.poll_timer.interval() != 5000:
+                self.poll_timer.setInterval(5000)
             return
 
         self.demo_mode = False
@@ -144,6 +170,8 @@ class StateManager(QObject):
                 self.current_track = standby_track
                 self.playback_state_changed.emit(standby_track)
             self.connection_changed.emit(True)
+            if self.poll_timer.interval() != 5000:
+                self.poll_timer.setInterval(5000)
             return
 
         if in_play_lock and self._pending_track_uri and playback.get("uri") != self._pending_track_uri:
@@ -159,20 +187,37 @@ class StateManager(QObject):
         new_track_id = playback.get("track_id")
         server_progress = playback.get("progress_ms", 0)
         is_playing = playback.get("is_playing", False)
+        is_local = bool(playback.get("is_local_fallback", False))
         was_paused = not self.is_playing
 
         self.current_track = playback
-        self.duration_ms = playback.get("duration_ms", 1)
+        self.duration_ms = max(1, playback.get("duration_ms", 1))
         self.is_playing = is_playing
 
         # Pause / Play handling executed strictly on the main thread
         if not is_playing:
             if self.tick_timer.isActive():
                 self.tick_timer.stop()
-            self.current_progress_ms = server_progress
-            if self.poll_timer.interval() != 800:
-                self.poll_timer.setInterval(800)  # Responsive 800ms poll to catch unpause quickly
+            if server_progress > 0 or new_track_id != prev_track_id:
+                self.current_progress_ms = server_progress
+            
+            # Adaptive pause backoff:
+            if was_paused and self._pause_start_timestamp > 0.0:
+                pause_duration = now - self._pause_start_timestamp
+                if pause_duration < 15.0:
+                    desired_interval = 800  # Responsive 800ms to catch quick unpause
+                elif pause_duration < 120.0:
+                    desired_interval = 3000  # Relaxed 3s to conserve API quota
+                else:
+                    desired_interval = 5000  # Long pause backoff 5s
+            else:
+                self._pause_start_timestamp = now
+                desired_interval = 800
+
+            if self.poll_timer.interval() != desired_interval:
+                self.poll_timer.setInterval(desired_interval)
         else:
+            self._pause_start_timestamp = 0.0
             if self.poll_timer.interval() != 1500:
                 self.poll_timer.setInterval(1500)
             
@@ -181,16 +226,17 @@ class StateManager(QObject):
                 self.tick_timer.start(self.tick_interval_ms)
 
             # Snap progress immediately if resuming from pause or changing song
-            if was_paused or new_track_id != prev_track_id:
+            if new_track_id != prev_track_id or was_paused:
                 self.current_progress_ms = server_progress
-                self.active_lyric_idx = -1  # Force immediate lyric evaluation upon resume
+                self.active_lyric_idx = -1  # Force immediate lyric evaluation upon song change
             else:
                 # Soft clock drift correction (avoids rubber-banding / jitter)
-                drift = abs(server_progress - self.current_progress_ms)
-                if drift > 800:
-                    self.current_progress_ms = server_progress
-                else:
-                    self.current_progress_ms += int((server_progress - self.current_progress_ms) * 0.3)
+                if server_progress > 0 or not is_local:
+                    drift = abs(server_progress - self.current_progress_ms)
+                    if drift > 800:
+                        self.current_progress_ms = server_progress
+                    else:
+                        self.current_progress_ms += int((server_progress - self.current_progress_ms) * 0.3)
 
         self.playback_state_changed.emit(playback)
         self._emit_progress()
@@ -242,6 +288,11 @@ class StateManager(QObject):
             self.poll_timer.stop()
         if hasattr(self, "tick_timer"):
             self.tick_timer.stop()
+        if hasattr(self, "thread_pool"):
+            try:
+                self.thread_pool.clear()
+            except Exception:
+                pass
 
     def _interpolate_tick(self):
         """Interpolates playback progress between API polls for 60fps smooth progress"""
@@ -398,6 +449,8 @@ class StateManager(QObject):
         self._pending_track_uri = uri
 
         if track_meta:
+            if hasattr(self.spotify, "cache_track_metadata"):
+                self.spotify.cache_track_metadata(track_meta)
             optimistic_track = {
                 "is_playing": True,
                 "track_id": track_meta.get("id", uri),
@@ -429,10 +482,9 @@ class StateManager(QObject):
             success, message = self.spotify.play_track(uri, context_uri=album_uri)
             self._play_result_received.emit(success, message)
             if success:
-                time.sleep(0.5)
-                self._bg_fetch_playback()
-                time.sleep(0.9)
-                self._bg_fetch_playback()
+                if not (hasattr(self.spotify, "is_rate_limited") and self.spotify.is_rate_limited()):
+                    time.sleep(0.6)
+                    self._bg_fetch_playback()
             else:
                 self._play_lock_until = 0.0
                 self._pending_track_uri = ""

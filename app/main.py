@@ -45,13 +45,54 @@ def get_app_icon() -> QIcon | None:
                     return QIcon(candidate)
     return None
 
+WIN32_MUTEX_HANDLE = None
+
+def acquire_win32_mutex(mutex_name: str = "Global\\spfnotch_SingleInstance_Mutex") -> bool:
+    """
+    Acquires a named kernel mutex on Windows.
+    Returns True if this is the first/only instance holding the mutex.
+    Returns False if another instance is already running (GetLastError == 183 ERROR_ALREADY_EXISTS).
+    """
+    global WIN32_MUTEX_HANDLE
+    if sys.platform != "win32":
+        return True
+    try:
+        ERROR_ALREADY_EXISTS = 183
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.CreateMutexW(None, False, mutex_name)
+        last_error = kernel32.GetLastError()
+        if last_error == ERROR_ALREADY_EXISTS:
+            if handle:
+                kernel32.CloseHandle(handle)
+            return False
+        WIN32_MUTEX_HANDLE = handle
+        return True
+    except Exception as e:
+        print(f"[Main] Error creating Win32 mutex: {e}")
+        return True
+
 def check_single_instance(test_mode: bool = False) -> bool:
     """Returns True if this is the only instance, or False if another is already running."""
     if test_mode:
         return True
+
+    # 1. First check Win32 Kernel Named Mutex
+    if not acquire_win32_mutex():
+        socket = QLocalSocket()
+        socket.connectToServer(LOCAL_SERVER_NAME)
+        if socket.waitForConnected(400):
+            try:
+                socket.write(b"EXPAND\n")
+                socket.waitForBytesWritten(800)
+                socket.disconnectFromServer()
+            except Exception:
+                pass
+        return False
+
+    # 2. Check if a local IPC server is already responding
     socket = QLocalSocket()
     socket.connectToServer(LOCAL_SERVER_NAME)
-    if socket.waitForConnected(300):
+    if socket.waitForConnected(200):
         try:
             socket.write(b"EXPAND\n")
             socket.waitForBytesWritten(800)
@@ -59,9 +100,10 @@ def check_single_instance(test_mode: bool = False) -> bool:
         except Exception:
             pass
         return False
+
     return True
 
-def setup_single_instance_server(notch_window) -> QLocalServer:
+def setup_single_instance_server(notch_window, on_quit=None) -> QLocalServer:
     server = QLocalServer()
     QLocalServer.removeServer(LOCAL_SERVER_NAME)
     if server.listen(LOCAL_SERVER_NAME):
@@ -71,14 +113,80 @@ def setup_single_instance_server(notch_window) -> QLocalServer:
                 def on_ready():
                     data = bytes(client.readAll()).decode("utf-8", errors="ignore")
                     if "QUIT" in data:
-                        QApplication.quit()
+                        if on_quit:
+                            on_quit()
+                        else:
+                            QApplication.quit()
                     elif "EXPAND" in data:
                         notch_window.expand()
                 client.readyRead.connect(on_ready)
         server.newConnection.connect(on_new_connection)
     return server
 
-def create_tray_icon(app, notch_win, app_icon: QIcon | None):
+def clean_end_task(notch_window=None, state_manager=None, tray=None, ipc_server=None):
+    """
+    Deterministic End-Task shutdown:
+    1. Flushes and saves settings to config.json
+    2. Hides notch window immediately
+    3. Hides and cleans up system tray icon (eliminates ghost icons in Windows taskbar)
+    4. Closes IPC server and removes named pipe
+    5. Shuts down state manager and clears thread pool workers
+    6. Calls os._exit(0) for hard process termination (no zombie tasks)
+    """
+    try:
+        print("[Main] Executing clean end-task shutdown...")
+        if notch_window:
+            try:
+                notch_window.save_all_settings()
+                notch_window.hide()
+            except Exception as e:
+                print(f"[Main] Error saving settings on exit: {e}")
+
+        if tray:
+            try:
+                tray.hide()
+                tray.deleteLater()
+            except Exception:
+                pass
+
+        if ipc_server:
+            try:
+                ipc_server.close()
+                QLocalServer.removeServer(LOCAL_SERVER_NAME)
+            except Exception:
+                pass
+
+        if state_manager:
+            try:
+                state_manager.shutdown()
+            except Exception:
+                pass
+
+        try:
+            from PyQt6.QtCore import QThreadPool
+            QThreadPool.globalInstance().clear()
+        except Exception:
+            pass
+
+        if notch_window:
+            try:
+                notch_window.close()
+            except Exception:
+                pass
+
+        global WIN32_MUTEX_HANDLE
+        if WIN32_MUTEX_HANDLE and sys.platform == "win32":
+            try:
+                ctypes.windll.kernel32.CloseHandle(WIN32_MUTEX_HANDLE)
+                WIN32_MUTEX_HANDLE = None
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[Main] Error in clean_end_task: {e}")
+    finally:
+        os._exit(0)
+
+def create_tray_icon(app, notch_win, app_icon: QIcon | None, on_quit=None):
     if app_icon and not app_icon.isNull():
         tray_icon = app_icon
     else:
@@ -109,7 +217,10 @@ def create_tray_icon(app, notch_win, app_icon: QIcon | None):
 
     menu.addSeparator()
     act_quit = menu.addAction("Keluar")
-    act_quit.triggered.connect(app.quit)
+    if on_quit:
+        act_quit.triggered.connect(on_quit)
+    else:
+        act_quit.triggered.connect(app.quit)
 
     tray.setContextMenu(menu)
     tray.show()
@@ -154,11 +265,20 @@ def main():
     notch_window = NotchWindow(state_manager, image_cache, config)
     notch_window.show()
 
+    # Shared end-task closure for deterministic exit
+    tray = None
+    ipc_server = None
+
+    def do_end_task():
+        clean_end_task(notch_window, state_manager, tray, ipc_server)
+
+    notch_window.exit_requested_callback = do_end_task
+
     # System Tray
-    tray = create_tray_icon(app, notch_window, app_icon)
+    tray = create_tray_icon(app, notch_window, app_icon, on_quit=do_end_task)
 
     # Single-instance local server to listen for new clicks/activations
-    ipc_server = setup_single_instance_server(notch_window)
+    ipc_server = setup_single_instance_server(notch_window, on_quit=do_end_task)
 
     # Start state synchronization
     state_manager.start()
@@ -169,7 +289,7 @@ def main():
 
     if test_mode:
         print("[spfnotch] --test flag detected. Running 1.2s smoke test...")
-        QTimer.singleShot(1200, lambda: (print("[spfnotch] Smoke test successful!"), app.quit()))
+        QTimer.singleShot(1200, lambda: (print("[spfnotch] Smoke test successful!"), do_end_task()))
 
     sys.exit(app.exec())
 

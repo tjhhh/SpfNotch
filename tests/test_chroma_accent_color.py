@@ -49,14 +49,13 @@ def test_chroma_accent_color_suite():
     assert "rose" in tab.swatch_buttons
     assert "amber" in tab.swatch_buttons
     assert "silver" in tab.swatch_buttons
-    assert hasattr(tab, "btn_custom_color")
     assert hasattr(tab, "lbl_accent_tag")
 
     # Default is preset mint #34D399
     assert tab.accent_mode == "preset"
     assert tab.current_accent.upper() == "#34D399"
     assert tab.swatch_buttons["mint"].property("selected") is not False
-    print("[PASS] 2. SettingsTab initializes 7 curated swatches, + Kustom button, and default Emerald Mint")
+    print("[PASS] 2. SettingsTab initializes 7 curated swatches and default Emerald Mint")
 
     # 3. Test Switching to Cyan Preset
     received_data = []

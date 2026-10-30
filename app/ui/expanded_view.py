@@ -256,6 +256,7 @@ class ExpandedView(QWidget):
     seek_clicked = pyqtSignal(float)
     collapse_clicked = pyqtSignal()
     exit_clicked = pyqtSignal()
+    reconnect_requested = pyqtSignal()
 
     def __init__(self, current_client_id: str = "", current_client_secret: str = "", parent=None):
         super().__init__(parent)
@@ -425,6 +426,7 @@ class ExpandedView(QWidget):
         self.search_tab = SearchTab()
         self.settings_tab = SettingsTab(current_client_id, current_client_secret)
         self.settings_tab.exit_requested.connect(self.exit_clicked.emit)
+        self.settings_tab.reconnect_requested.connect(self.reconnect_requested.emit)
 
         self.tabs.addTab(self.lyrics_tab, "Lirik")
         self.tabs.addTab(self.queue_tab, "Antrean")

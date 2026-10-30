@@ -88,7 +88,8 @@ class NotchWindow(QWidget):
         # Initialize and apply configuration across views
         self.expanded_view.apply_initial_config(config)
         self.pill_view.set_accent_color(self.accent_color)
-        self.expanded_view.settings_tab.set_connected(self.state_mgr.spotify.is_connected)
+        tier = getattr(self.state_mgr.spotify, "user_product", "")
+        self.expanded_view.settings_tab.set_connected(self.state_mgr.spotify.is_connected, product_tier=tier)
 
         self.main_layout.addWidget(self.pill_view)
         self.main_layout.addWidget(self.expanded_view)
@@ -224,7 +225,7 @@ class NotchWindow(QWidget):
         self.state_mgr.lyrics_loaded.connect(self.expanded_view.lyrics_tab.set_lyrics)
         self.state_mgr.active_lyric_changed.connect(self._on_lyric_changed)
         self.state_mgr.queue_updated.connect(self.expanded_view.queue_tab.set_queue)
-        self.state_mgr.connection_changed.connect(self.expanded_view.settings_tab.set_connected)
+        self.state_mgr.connection_changed.connect(self._on_connection_changed)
 
         # Settings & Personalization
         self.expanded_view.settings_tab.idle_mode_changed.connect(self._on_idle_mode_changed)
@@ -244,6 +245,7 @@ class NotchWindow(QWidget):
         self.expanded_view.seek_clicked.connect(self.state_mgr.seek)
         self.expanded_view.collapse_clicked.connect(self.collapse)
         self.expanded_view.exit_clicked.connect(self._on_exit_requested)
+        self.expanded_view.reconnect_requested.connect(self._on_reconnect_requested)
 
         # Queue tab actions
         self.expanded_view.queue_tab.refresh_requested.connect(self.state_mgr.fetch_queue)
@@ -357,11 +359,34 @@ class NotchWindow(QWidget):
             current_idle = self.expanded_view.settings_tab.combo_idle.currentData() or "lyrics"
             self._save_idle_mode_to_config(current_idle)
 
+    def _on_connection_changed(self, is_connected: bool):
+        err = getattr(self.state_mgr.spotify, "last_error_message", "")
+        tier = getattr(self.state_mgr.spotify, "user_product", "")
+        self.expanded_view.settings_tab.set_connected(is_connected, err, product_tier=tier)
+
+    def _on_reconnect_requested(self):
+        if hasattr(self, "state_mgr"):
+            success = self.state_mgr.force_reconnect()
+            err = getattr(self.state_mgr.spotify, "last_error_message", "")
+            tier = getattr(self.state_mgr.spotify, "user_product", "")
+            self.expanded_view.settings_tab.set_connected(success, err, product_tier=tier)
+
     def _on_exit_requested(self):
+        self.hide()
+        if hasattr(self, "exit_requested_callback") and callable(self.exit_requested_callback):
+            self.exit_requested_callback()
+            return
         self.save_all_settings()
         if hasattr(self, "state_mgr"):
             self.state_mgr.shutdown()
+        try:
+            from PyQt6.QtCore import QThreadPool
+            QThreadPool.globalInstance().clear()
+        except Exception:
+            pass
         QApplication.quit()
+        import os
+        os._exit(0)
 
     def closeEvent(self, event):
         self.save_all_settings()
@@ -389,17 +414,19 @@ class NotchWindow(QWidget):
         def on_auth_done(success: bool, msg: str):
             self.auth_done_signal.emit(success, msg)
 
-        self.state_mgr.spotify.save_credentials(client_id, client_secret)
+        # Cleanly save credentials and invalidate old token cache
+        self.state_mgr.spotify.save_credentials(client_id, client_secret, clear_cache=True)
         self.expanded_view.settings_tab.set_credentials(client_id, client_secret)
-        if self.state_mgr.spotify.is_connected:
-            self._on_auth_finished(True, "Terhubung ke Spotify API")
-        else:
-            self.state_mgr.spotify.start_single_shot_auth(on_auth_done)
+
+        # Always launch single-shot auth so browser opens directly for user authorization
+        self.state_mgr.spotify.start_single_shot_auth(on_auth_done)
 
     def _on_auth_finished(self, success: bool, msg: str):
         self.expanded_view.settings_tab.btn_save.setEnabled(True)
         self.expanded_view.settings_tab.btn_save.setText("Simpan & Hubungkan")
-        self.expanded_view.settings_tab.set_connected(success)
+        err = getattr(self.state_mgr.spotify, "last_error_message", "") if not success else ""
+        tier = getattr(self.state_mgr.spotify, "user_product", "")
+        self.expanded_view.settings_tab.set_connected(success, err or (msg if not success else ""), product_tier=tier)
         if success:
             self.state_mgr.demo_mode = False
             self.state_mgr.poll_timer.start(1500)

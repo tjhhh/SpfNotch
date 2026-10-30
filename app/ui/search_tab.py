@@ -244,6 +244,7 @@ class SearchTab(QWidget):
 
         # Toast / Status
         self.status_lbl = QLabel("")
+        self.status_lbl.setWordWrap(True)
         self.status_lbl.setStyleSheet(f"color: {self.accent_color}; font-size: 10.5px; font-weight: bold;")
         self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_lbl.setVisible(False)

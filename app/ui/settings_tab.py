@@ -155,6 +155,7 @@ class SettingsTab(QWidget):
     input_focused = pyqtSignal()
     personalization_changed = pyqtSignal(dict)   # glass and ui parameters
     exit_requested = pyqtSignal()
+    reconnect_requested = pyqtSignal()
 
     PRESETS = [
         {
@@ -537,25 +538,6 @@ class SettingsTab(QWidget):
 
         swatch_layout.addStretch()
 
-        # Custom Color Picker button
-        self.btn_custom_color = QPushButton("+ Kustom...", swatch_card)
-        self.btn_custom_color.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_custom_color.setStyleSheet(
-            "QPushButton { "
-            "background: rgba(255, 255, 255, 0.07); "
-            "border: 1px solid rgba(255, 255, 255, 0.15); "
-            "color: rgba(255, 255, 255, 0.85); font-size: 10.5px; font-family: 'Courier New', monospace; "
-            "padding: 4px 10px; border-radius: 8px; font-weight: 600; "
-            "} "
-            "QPushButton:hover { "
-            "background: rgba(255, 255, 255, 0.15); "
-            "border: 1px solid rgba(255, 255, 255, 0.35); "
-            "color: #FFFFFF; "
-            "}"
-        )
-        self.btn_custom_color.clicked.connect(self._open_custom_color_dialog)
-        swatch_layout.addWidget(self.btn_custom_color)
-
         self.content_layout.addWidget(swatch_card)
 
     def _on_swatch_clicked(self, swatch_id: str, hex_val: str | None):
@@ -704,12 +686,33 @@ class SettingsTab(QWidget):
         sp_layout.setContentsMargins(12, 10, 12, 10)
         sp_layout.setSpacing(7)
 
-        # Connection status banner
+        # Connection status banner & reconnect button
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(8)
+
         self.status_banner = QLabel("● Belum Terhubung ke Spotify API")
         self.status_banner.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 11px;")
-        sp_layout.addWidget(self.status_banner)
+        status_row.addWidget(self.status_banner, 1)
 
-        # Guide text
+        self.btn_reconnect = QPushButton("🔄 Sambungkan Ulang")
+        self.btn_reconnect.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reconnect.setStyleSheet(
+            "QPushButton { "
+            "background: rgba(255, 255, 255, 0.08); color: #FFFFFF; font-weight: 600; "
+            "padding: 4px 10px; border-radius: 8px; font-size: 11px; "
+            "border: 1px solid rgba(255, 255, 255, 0.15); "
+            "} "
+            "QPushButton:hover { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.30); } "
+            "QPushButton:pressed { background: rgba(255, 255, 255, 0.05); }"
+        )
+        self.btn_reconnect.clicked.connect(self._on_reconnect_clicked)
+        status_row.addWidget(self.btn_reconnect)
+        sp_layout.addLayout(status_row)
+
+        # Guide text & Dashboard shortcut
+        guide_row = QHBoxLayout()
+        guide_row.setSpacing(6)
         self.guide = QLabel(
             "Buka <b>developer.spotify.com/dashboard</b>, set Redirect URI ke "
             "<b>http://127.0.0.1:8888/callback</b>, lalu isi Client ID & Secret:"
@@ -717,7 +720,20 @@ class SettingsTab(QWidget):
         self.guide.setStyleSheet("color: rgba(255, 255, 255, 0.60); font-size: 10.5px;")
         self.guide.setTextFormat(Qt.TextFormat.RichText)
         self.guide.setWordWrap(True)
-        sp_layout.addWidget(self.guide)
+        guide_row.addWidget(self.guide, 1)
+
+        self.btn_open_dashboard = QPushButton("🌐 Buka Dashboard")
+        self.btn_open_dashboard.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_open_dashboard.setStyleSheet(
+            "QPushButton { "
+            "background: rgba(29, 185, 84, 0.15); color: #1DB954; font-weight: bold; "
+            "padding: 4px 8px; border-radius: 6px; font-size: 10.5px; border: 1px solid rgba(29, 185, 84, 0.35); "
+            "} "
+            "QPushButton:hover { background: rgba(29, 185, 84, 0.25); border-color: #1DB954; }"
+        )
+        self.btn_open_dashboard.clicked.connect(self._open_dashboard)
+        guide_row.addWidget(self.btn_open_dashboard)
+        sp_layout.addLayout(guide_row)
 
         # Row 1: Client ID + Paste
         id_layout = QHBoxLayout()
@@ -957,10 +973,34 @@ class SettingsTab(QWidget):
         mode = self.combo_idle.currentData()
         self.idle_mode_changed.emit(mode)
 
-    def set_connected(self, is_connected: bool):
-        if is_connected:
-            self.status_banner.setText("● Terhubung ke Spotify API")
+    def _open_dashboard(self):
+        import webbrowser
+        webbrowser.open("https://developer.spotify.com/dashboard")
+
+    def _on_reconnect_clicked(self):
+        if hasattr(self, "btn_reconnect"):
+            self.btn_reconnect.setEnabled(False)
+            self.btn_reconnect.setText("⏳ Menyambungkan...")
+        self.reconnect_requested.emit()
+
+    def set_connected(self, is_connected: bool, error_msg: str = "", product_tier: str = ""):
+        if hasattr(self, "btn_reconnect"):
+            self.btn_reconnect.setEnabled(True)
+            self.btn_reconnect.setText("🔄 Sambungkan Ulang")
+        if is_connected and error_msg:
+            self.status_banner.setText("● Terhubung ke Spotify API (Limit 429 — Mode Lokal Aktif)")
+            self.status_banner.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 10.5px;")
+        elif is_connected:
+            tier_str = ""
+            if product_tier == "premium":
+                tier_str = " (Premium)"
+            elif product_tier == "free":
+                tier_str = " (Free — Kontrol Lokal)"
+            self.status_banner.setText(f"● Terhubung ke Spotify API{tier_str}")
             self.status_banner.setStyleSheet("color: #34D399; font-weight: bold; font-size: 11px;")
+        elif error_msg:
+            self.status_banner.setText(f"● {error_msg}")
+            self.status_banner.setStyleSheet("color: #EF4444; font-weight: bold; font-size: 10.5px;")
         else:
             self.status_banner.setText("● Belum Terhubung ke Spotify API")
             self.status_banner.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 11px;")
@@ -975,4 +1015,9 @@ class SettingsTab(QWidget):
         c_id = self.id_input.text().strip()
         c_secret = self.secret_input.text().strip()
         if c_id and c_secret:
+            self.btn_save.setEnabled(False)
+            self.btn_save.setText("⏳ Membuka Browser...")
             self.credentials_saved.emit(c_id, c_secret)
+        else:
+            self.status_banner.setText("● Masukkan Client ID dan Secret terlebih dahulu")
+            self.status_banner.setStyleSheet("color: #EF4444; font-weight: bold; font-size: 11px;")
